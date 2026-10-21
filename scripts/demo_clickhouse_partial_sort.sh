@@ -17,7 +17,7 @@ usage() {
 Usage: scripts/demo_clickhouse_partial_sort.sh [options]
 
 Start ClickHouse in Docker, generate an events dataset through ADBC, and print
-copyable DuckDB commands for read_adbc_partial_sort. The container and dataset
+the extension LOAD command and one minimal query. The container and dataset
 remain available after the script exits. Reruns reuse an existing dataset.
 
 Options:
@@ -78,8 +78,10 @@ import json, sys
 drivers = json.load(sys.stdin)["payload"]["drivers"]
 sys.exit(0 if any(driver["driver"] == "clickhouse" for driver in drivers) else 1)
 '; then
-    printf 'Installing the ClickHouse ADBC driver...\n'
-    dbc install 'clickhouse=0.1.1'
+    if ! install_output="$(dbc install 'clickhouse=0.1.1' 2>&1)"; then
+        printf '%s\n' "$install_output" >&2
+        die "Could not install the ClickHouse ADBC driver"
+    fi
 fi
 
 
@@ -87,13 +89,14 @@ if docker container inspect "$container" >/dev/null 2>&1; then
     owner="$(docker inspect --format "{{index .Config.Labels \"$label\"}}" "$container")"
     [[ "$owner" == true ]] || die "Container $container is not owned by this demo; choose another --container"
     if [[ "$(docker inspect --format '{{.State.Running}}' "$container")" != true ]]; then
-        printf 'Starting existing ClickHouse container %s...\n' "$container"
-        docker start "$container"
+        docker start "$container" >/dev/null
     fi
 else
-    printf 'Launching ClickHouse %s on 127.0.0.1:%s...\n' "$image" "$port"
-    docker run --detach --name "$container" --label "$label=true" \
-        --publish "127.0.0.1:$port:8123" --env CLICKHOUSE_SKIP_USER_SETUP=1 "$image"
+    if ! container_output="$(docker run --detach --name "$container" --label "$label=true" \
+        --publish "127.0.0.1:$port:8123" --env CLICKHOUSE_SKIP_USER_SETUP=1 "$image" 2>&1)"; then
+        printf '%s\n' "$container_output" >&2
+        die "Could not launch ClickHouse container $container"
+    fi
 fi
 published="$(docker port "$container" 8123/tcp)"
 [[ "$published" == "127.0.0.1:$port" ]] || die "Container publishes $published; rerun with the matching --port or choose another --container"
@@ -101,7 +104,6 @@ published="$(docker port "$container" 8123/tcp)"
 mkdir -p -- "$state_dir"
 state_dir="$(cd -- "$state_dir" && pwd)"
 python3 - "$state_dir" "$extension" "$port" "$rows" <<'PY'
-import os
 from pathlib import Path
 import sys
 
@@ -125,13 +127,10 @@ database = "adbc_partial_sort_demo"
 table = f"events_{rows}"
 source = f"{database}.{table}"
 
-def function(ratio, aligned=False):
-    keys = "['id']" if aligned else "['score', 'id']"
-    directions = "[false]" if aligned else "[true, false]"
+def function():
     return (
         f"read_adbc_partial_sort(\n    {profile}, {sql(database)}, {sql(table)},\n"
-        f"    partition_key := 'id', sort_columns := {keys},\n"
-        f"    descending := {directions}, pushdown_ratio := {ratio}\n)"
+        "    partition_key := 'id', sort_columns := ['score'], pushdown_ratio := 0.3\n)"
     )
 
 (directory / "ready.sql").write_text(
@@ -149,59 +148,27 @@ create = (
     + f"CALL adbc_execute({profile}, {sql(create)});\n"
     + f"SELECT CASE WHEN n = {rows} THEN n ELSE error('Demo table has an unexpected row count') END AS loaded_rows "
     + f"FROM read_adbc({profile}, {sql('SELECT count() AS n FROM ' + source)});\n"
-    + "SELECT id, score, payload FROM " + function("0.3") + " LIMIT 5;\n"
+    + "SELECT * FROM " + function() + " LIMIT 10;\n"
 )
 (directory / "init.sql").write_text(load)
-examples = (
-    ".timer on\n\n"
-    "-- Sort by score DESC, id ASC, with 30% of the id range assigned to ClickHouse.\n"
-    "-- NULL scores sort last. No outer ORDER BY is needed for this direct scan.\n"
-    "SELECT id, score, payload FROM " + function("0.3") + " LIMIT 20;\n\n"
-    "-- Output ordering aligned with the physical storage key.\n"
-    "SELECT id, score FROM " + function("0.3", aligned=True) + " LIMIT 20;\n\n"
-    "-- Consume all rows to compare local, partial, and remote sorting.\n"
-    "-- LIMIT previews do not measure the cost of transferring the complete result.\n"
-)
-for ratio in ("0", "0.3", "1"):
-    examples += (
-        "COPY (SELECT * FROM " + function(ratio) + ")\n"
-        f"TO {sql(os.devnull)} (FORMAT CSV);\n\n"
-    )
-(directory / "examples.sql").write_text(examples)
+(directory / "examples.sql").write_text(load + "\nSELECT * FROM " + function() + " LIMIT 10;\n")
 PY
 
-printf 'Waiting for ClickHouse through ADBC'
 ready=false
 for ((attempt=1; attempt<=60; attempt++)); do
     if "$duckdb" -unsigned -batch -bail -no-agent < "$state_dir/ready.sql" > "$state_dir/ready.log" 2>&1; then
         ready=true
         break
     fi
-    printf '.'
     sleep 1
 done
-printf '\n'
 if [[ "$ready" != true ]]; then
     cat "$state_dir/ready.log" >&2
     die "ClickHouse did not become ready through ADBC; inspect: docker logs $container"
 fi
 
-printf 'Loading/reusing %s generated events through ADBC (physical ORDER BY id)...\n' "$rows"
 if ! "$duckdb" -unsigned -batch -bail -no-agent < "$state_dir/setup.sql" > "$state_dir/setup.log" 2>&1; then
     cat "$state_dir/setup.log" >&2
     die "Demo setup failed; details are in $state_dir/setup.log"
 fi
-cat "$state_dir/setup.log"
-
-boundary=$((rows - rows * 3 / 10))
-printf '\nDataset: adbc_partial_sort_demo.events_%s; id range [0, %s].\n' "$rows" "$((rows - 1))"
-printf 'At ratio 0.3: DuckDB sorts id < %s; ClickHouse sorts id >= %s.\n' "$boundary" "$boundary"
-printf '\nOpen DuckDB (extension already loaded):\n\n  '
-printf '%q -unsigned -init %q\n' "$duckdb" "$state_dir/init.sql"
-printf '\nThen paste these DuckDB commands:\n\n'
 cat "$state_dir/examples.sql"
-printf 'Or run every saved example directly from your shell:\n\n  '
-printf '%q -unsigned -batch -bail -init %q < %q\n' "$duckdb" "$state_dir/init.sql" "$state_dir/examples.sql"
-printf '\nGenerated profile and SQL: %s\n' "$state_dir"
-printf 'Stop ClickHouse when finished (the dataset remains in the container):\n\n  '
-printf 'docker stop %q\n' "$container"
