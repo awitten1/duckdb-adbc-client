@@ -220,6 +220,67 @@ D CALL adbc_clear_cache();
 └─────────┘
 ```
 
+## Experimental ClickHouse partial sort
+
+`read_adbc_partial_sort` divides a ClickHouse table's physical sorting-key range between ClickHouse and DuckDB. Both subsets are transferred as Arrow streams through ADBC. ClickHouse sorts the upper range while DuckDB reads and sorts the lower range; the function merges their ordered results. Schema discovery, physical-key metadata, and range bounds also use ADBC.
+
+```toml
+# clickhouse.toml
+profile_version = 1
+driver = "clickhouse"
+
+[Options]
+uri = "http://localhost:8123/"
+```
+
+```sql
+SELECT * FROM read_adbc_partial_sort(
+    'profile://./clickhouse.toml', 'default', 'events',
+    partition_key := 'id',
+    sort_columns := ['score', 'id'],
+    descending := [true, false],
+    nulls_first := [false, false],
+    pushdown_ratio := 0.3
+);
+```
+
+The partition key must be a simple leading column of the table's physical sorting key. Partition and output sort keys must be signed or unsigned integers up to 64 bits; NULLs are supported. Other source columns are returned unchanged. Output ordering may match the physical key, allowing ClickHouse to exploit ordered reads, or use different integer columns. `descending` and `nulls_first` default to all `false`; supplied lists must match `sort_columns` in length. Column names are exact, case-sensitive source names.
+
+**The ratio measures key-range width, not row count.** For minimum 0 and maximum 999999, ratio 0.3 selects `id >= 700000` for ClickHouse and `id < 700000` for DuckDB. More generally, the inclusive width is `max - min + 1`; ClickHouse receives the upper `floor(width * ratio)` values. Sparse or skewed keys can produce uneven row counts. Ratios use `DECIMAL(10,9)` precision and widened integer arithmetic, including the full `UInt64` range. NULL partition keys go to DuckDB for intermediate ratios. Ratio 0 sorts everything locally; ratio 1 sorts everything remotely.
+
+This is an experimental function for **unchanged tables and schemas throughout binding and execution**. It does not establish a shared snapshot between connections. Each invocation uses isolated ADBC connections; its internal read concurrency does not enable general concurrent ADBC operations elsewhere in the extension. Physical-key expressions and composite range boundaries are unsupported. There is no filter/projection pushdown or automatic optimizer rewrite. The function emits an ordered stream, but joins, aggregates, and other order-changing SQL operations may discard that order. An outer `ORDER BY` still performs a normal DuckDB sort.
+
+The local sort uses DuckDB's memory manager and can spill to disk. The remote queue holds at most two Arrow batches, plus one in transfer, with additional memory for active conversion/output buffers. Arrow/driver buffers are additional to DuckDB's `memory_limit`. Cancellation and early `LIMIT` perform cooperative cleanup: queue waits are interrupted, but cleanup can wait for an in-flight ADBC driver call. Configure appropriate server/network timeouts for your environment.
+
+### Testing and benchmarking partial sort
+
+For a persistent local demo, run:
+
+```sh
+bash scripts/demo_clickhouse_partial_sort.sh
+# Optional: choose a smaller dataset or a different port/container.
+bash scripts/demo_clickhouse_partial_sort.sh --rows 100000 --port 18124 \
+    --container adbc-sort-demo-small --state-dir build/partial-sort-demo-small
+```
+
+The script starts ClickHouse in Docker on a loopback-only port, installs the ClickHouse ADBC driver if needed, and creates a generated events table physically ordered by `id`. All loading and queries use ADBC. It prints an interactive DuckDB launch command plus examples for partial sorting, storage-aligned ordering, and fully consuming local/partial/remote sort results. Profiles and SQL are saved under `build/partial-sort-demo`; the container stays running so the printed commands work. Reruns reuse the dataset, and different row counts use separate tables. Use `--state-dir` to keep separate sets of generated example files. Run with `--help` for options.
+
+The integration suite creates a unique temporary ClickHouse database and populates it through ADBC-executed SQL. It removes that database after the tests, including setup failures. Use a disposable test server: the test account needs database creation/deletion privileges and access to `SYSTEM FLUSH LOGS` and `system.query_log` for the server-overlap assertion. The table function itself does not need query-log access. Install the ClickHouse driver with `dbc install 'clickhouse=0.1.1'`, build the extension, then run against a ClickHouse 26.8.2.7 server:
+
+```sh
+python3 scripts/test_clickhouse_partial_sort.py --url http://localhost:8123/
+# Or use an existing connection profile:
+python3 scripts/test_clickhouse_partial_sort.py --profile profile://myclickhouse
+
+python3 scripts/benchmark_clickhouse_partial_sort.py \
+    --url http://localhost:8123/ --rows 1000000 --repeats 3 \
+    --output /tmp/partial-sort-benchmark.json
+```
+
+Both scripts accept `--duckdb` and `--extension` paths. Set `ADBC_DRIVER_PATH` if your driver installation is outside the driver's standard search locations. A separate ClickHouse CI job runs the integration suite; the ordinary SQL tests do not require ClickHouse.
+
+The benchmark consumes every row for ratios 0, 0.25, 0.5, 0.75, and 1, covering dense/skewed keys and storage-aligned/unaligned output orders. Reported wall time includes CLI startup, binding, bounds discovery, transfer, sorting, merging, and a common CSV output sink. DuckDB JSON profiling includes actual local/remote row counts, queue high watermark, bounds duration, local ingestion/sort duration, branch-active overlap, and peak memory/spill. Branch-active overlap includes I/O and backpressure; it is not a measurement of simultaneous CPU usage. Performance is workload-dependent and all rows still cross the ADBC connection.
+
 ## Limitations
 
 ### Autocommit Mode
@@ -252,7 +313,7 @@ The ADBC extension does not currently support connecting to another DuckDB datab
 
 ### Concurrency Within a Single Process
 
-The ADBC extension does not currently support concurrent ADBC operations within a single process.
+Concurrent ADBC operations within a single process are unsupported, except for the isolated read workers inside `read_adbc_partial_sort`.
 
 ### Concurrency Within a Single SQL Statement
 
