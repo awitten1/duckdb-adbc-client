@@ -17,9 +17,9 @@ usage() {
 Usage: scripts/demo_clickhouse_partial_sort.sh [options]
 
 Start ClickHouse in Docker, generate an events dataset through ADBC, and print
-the extension LOAD command, a partial-sort query, and a ClickHouse-sort query.
-The container and dataset
-remain available after the script exits. Reruns reuse an existing dataset.
+the extension LOAD command and minimal partial, partitioned, and remote-sort
+queries. The container and dataset remain available after the script exits.
+Reruns reuse an existing dataset.
 
 Options:
   --rows N           Dataset rows (default: 1000000; maximum: 999999999)
@@ -128,9 +128,10 @@ database = "adbc_partial_sort_demo"
 table = f"events_{rows}"
 source = f"{database}.{table}"
 
-def function():
+def function(partitioned=False):
+    name = "read_adbc_partitioned_sort" if partitioned else "read_adbc_partial_sort"
     return (
-        f"read_adbc_partial_sort(\n    {profile}, {sql(database)}, {sql(table)},\n"
+        f"{name}(\n    {profile}, {sql(database)}, {sql(table)},\n"
         "    partition_key := 'id', sort_columns := ['score'], pushdown_ratio := 0.3\n)"
     )
 
@@ -150,12 +151,14 @@ create = (
     + f"SELECT CASE WHEN n = {rows} THEN n ELSE error('Demo table has an unexpected row count') END AS loaded_rows "
     + f"FROM read_adbc({profile}, {sql('SELECT count() AS n FROM ' + source)});\n"
     + "SELECT * FROM " + function() + " LIMIT 10;\n"
+    + "SELECT * FROM " + function(partitioned=True) + " LIMIT 10;\n"
 )
 (directory / "init.sql").write_text(load)
 remote_query = f"SELECT * FROM {source} ORDER BY score ASC NULLS LAST"
 (directory / "examples.sql").write_text(
     load
     + "\nSELECT * FROM " + function() + " LIMIT 10;\n"
+    + "\nSELECT * FROM " + function(partitioned=True) + " LIMIT 10;\n"
     + f"\nSELECT * FROM read_adbc(\n    {profile},\n    {sql(remote_query)}\n) LIMIT 10;\n"
 )
 PY

@@ -31,4 +31,5 @@ jobs:
           ADBC_DRIVER_PATH: /home/runner/.config/adbc/drivers
         run: |
           ./build/release/test/unittest test/sql/partial_sort_arguments.test
+          ./build/release/test/unittest test/sql/partitioned_sort_arguments.test
           python3 scripts/test_clickhouse_partial_sort.py
