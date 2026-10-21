@@ -11,7 +11,6 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
-#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -26,11 +25,7 @@ namespace {
 constexpr int64_t RATIO_SCALE = 1000000000;
 
 string QuoteIdentifier(const string &name) {
-    return "\"" + StringUtil::Replace(StringUtil::Replace(name, "\\", "\\\\"), "\"", "\"\"") + "\"";
-}
-
-string QuoteLiteral(const string &text) {
-    return "'" + StringUtil::Replace(StringUtil::Replace(text, "\\", "\\\\"), "'", "''") + "'";
+    return "\"" + StringUtil::Replace(name, "\"", "\"\"") + "\"";
 }
 
 bool IntegerKey(const LogicalType &type) {
@@ -47,52 +42,6 @@ bool IntegerKey(const LogicalType &type) {
     default:
         return false;
     }
-}
-
-bool LeadingPhysicalKey(const string &expression, const string &key) {
-    idx_t position = 0;
-    auto skip_space = [&]() {
-        while (position < expression.size() && std::isspace(static_cast<unsigned char>(expression[position]))) {
-            ++position;
-        }
-    };
-    skip_space();
-    bool tuple = expression.compare(position, 6, "tuple(") == 0;
-    if (tuple) {
-        position += 6;
-        skip_space();
-    }
-    string column;
-    if (position < expression.size() && (expression[position] == '`' || expression[position] == '"')) {
-        auto quote = expression[position++];
-        bool closed = false;
-        while (position < expression.size()) {
-            auto character = expression[position++];
-            if (character == '\\' && position < expression.size()) {
-                column += expression[position++];
-            } else if (character == quote) {
-                if (position < expression.size() && expression[position] == quote) {
-                    column += expression[position++];
-                } else {
-                    closed = true;
-                    break;
-                }
-            } else {
-                column += character;
-            }
-        }
-        if (!closed) {
-            return false;
-        }
-    } else {
-        while (position < expression.size() &&
-               (std::isalnum(static_cast<unsigned char>(expression[position])) || expression[position] == '_')) {
-            column += expression[position++];
-        }
-    }
-    skip_space();
-    return column == key &&
-           (position == expression.size() || expression[position] == ',' || (tuple && expression[position] == ')'));
 }
 
 // Every query owns an independent connection. No handle is used concurrently.
@@ -215,7 +164,7 @@ struct PartialSortBindData : public TableFunctionData {
     int64_t ratio;
 
     string Source() const {
-        return QuoteIdentifier(database) + "." + QuoteIdentifier(table);
+        return (database.empty() ? "" : QuoteIdentifier(database) + ".") + QuoteIdentifier(table);
     }
 
     string Select() const {
@@ -287,9 +236,10 @@ unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
     if (!Settings::Get<EnableExternalAccessSetting>(context)) {
         throw PermissionException("ADBC partial sort requires external access");
     }
-    for (auto &value : input.inputs) {
-        if (value.IsNull() || value.GetValue<string>().empty()) {
-            throw BinderException("ADBC partial sort requires nonempty URI, database and table names");
+    for (idx_t i = 0; i < input.inputs.size(); ++i) {
+        auto &value = input.inputs[i];
+        if (value.IsNull() || (i != 1 && value.GetValue<string>().empty())) {
+            throw BinderException("ADBC partial sort requires nonempty URI and table names and a non-NULL namespace");
         }
     }
     auto data = make_uniq<PartialSortBindData>();
@@ -311,7 +261,8 @@ unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
     auto nulls_first = ReadFlags(input, "nulls_first", columns.size());
 
     AdbcQuery query(data->uri);
-    query.Execute("SELECT * FROM " + data->Source() + " LIMIT 0");
+    // Some drivers infer Arrow types from result rows rather than declared SQL types.
+    query.Execute("SELECT * FROM " + data->Source() + " LIMIT 1");
     {
         ArrowCursor cursor(context, query.GetSchema());
         data->types = cursor.table.GetTypes();
@@ -332,17 +283,6 @@ unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
         data->sort_columns.push_back(ResolveColumn(*data, columns[i].GetValue<string>()));
         data->modifiers.emplace_back(descending[i] ? OrderType::DESCENDING : OrderType::ASCENDING,
                                      nulls_first[i] ? OrderByNullType::NULLS_FIRST : OrderByNullType::NULLS_LAST);
-    }
-    auto metadata = ReadRows(context,
-                             data->uri,
-                             "SELECT sorting_key FROM system.tables WHERE database = " + QuoteLiteral(data->database) +
-                                 " AND name = " + QuoteLiteral(data->table));
-    bool matches = false;
-    if (metadata.size() == 1 && !metadata[0][0].IsNull()) {
-        matches = LeadingPhysicalKey(metadata[0][0].GetValue<string>(), data->partition_key);
-    }
-    if (!matches) {
-        throw BinderException("partition_key must be a simple leading column of the ClickHouse physical sorting key");
     }
     types = data->types;
     names = StringsToIdentifiers(data->names);
@@ -726,8 +666,8 @@ void RegisterAdbcPartialSort(ExtensionLoader &loader) {
     function.get_metrics = PartialSortMetrics;
     CreateTableFunctionInfo info(function);
     FunctionDescription description;
-    description.parameter_names = {"adbc_connection_profile_uri", "database", "table"};
-    description.description = "Sorts an unchanged ClickHouse table using concurrent ADBC key-range reads, a local "
+    description.parameter_names = {"adbc_connection_profile_uri", "schema_or_database", "table"};
+    description.description = "Sorts an unchanged SQL table using concurrent ADBC key-range reads, a local "
                               "sort, and an ordered merge. The pushdown ratio measures key-range width, not rows.";
     description.categories = {"adbc"};
     info.descriptions.push_back(std::move(description));

@@ -228,6 +228,15 @@ class PartialSortTests(unittest.TestCase):
         h.execute(f"INSERT INTO {h.source(table)} VALUES (0,3),(50,2),(100,1)")
         self.assert_matches(table, partition=key, keys=("score", key))
 
+    def test_partition_key_without_physical_ordering(self):
+        # A nonleading integer column remains a valid range partition.
+        self.assert_matches("events", partition="score", descending=[True, False])
+        h = self.harness
+        h.create("unordered", "id Int64, score Int64", order="tuple()")
+        h.execute(f"INSERT INTO {h.source('unordered')} VALUES (100,1),(0,3),(50,2)")
+        for ratio in ("0", "0.5", "1"):
+            self.assert_matches("unordered", ratio=ratio)
+
     def test_invalid_arguments(self):
         h = self.harness
         cases = [
@@ -236,7 +245,6 @@ class PartialSortTests(unittest.TestCase):
             (h.function("events", "NULL"), "requires pushdown_ratio"),
             (h.function("events", keys=()), "must not be empty"),
             (h.function("events", descending=[True]), "must match"),
-            (h.function("events", partition="score"), "simple leading column"),
             (h.function("events", keys=("payload",)), "must be an integer"),
             (h.function("events", keys=("missing",)), "does not exist"),
         ]
@@ -255,13 +263,18 @@ class PartialSortTests(unittest.TestCase):
             table = f"failure_{bad_id}"
             h.create(table, "id UInt64")
             h.execute(f"INSERT INTO {h.source(table)} SELECT number FROM numbers(100)")
-            # Existing parts lack this column, so its default is evaluated while reading.
-            h.execute(
-                f"ALTER TABLE {h.source(table)} ADD COLUMN score Int64 "
+            # Bind with a valid default, then inject a read error without changing
+            # the schema. Schema discovery can itself read a row on some drivers.
+            h.execute(f"ALTER TABLE {h.source(table)} ADD COLUMN score Int64 DEFAULT 1")
+            alter = (
+                f"ALTER TABLE {h.source(table)} MODIFY COLUMN score Int64 "
                 f"DEFAULT intDiv(1, toInt64(id) - {bad_id})"
             )
             result = h.run(
-                "SELECT * FROM " + h.function(table), check=False, timeout=60
+                f"PREPARE failing AS SELECT * FROM {h.function(table)}; "
+                f"CALL adbc_execute({literal(h.profile)}, {literal(alter)}); EXECUTE failing",
+                check=False,
+                timeout=60,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("division", result.stderr.lower())
