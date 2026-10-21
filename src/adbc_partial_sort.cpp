@@ -8,6 +8,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/profiler/profiling_node.hpp"
 #include "duckdb/main/settings.hpp"
+#include "duckdb/parallel/task_executor.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -103,6 +104,17 @@ public:
         if (table.GetNames() != names || table.GetTypes() != types) {
             throw IOException("ADBC partial sort: source schema changed since binding");
         }
+    }
+
+    void SetBatch(shared_ptr<ArrowArrayWrapper> batch, idx_t offset = 0) {
+        state.Reset();
+        state.chunk = std::move(batch);
+        state.chunk_offset = offset;
+    }
+
+    void ReleaseBatch() {
+        state.Reset();
+        state.chunk = make_uniq<ArrowArrayWrapper>();
     }
 
     bool Next(DataChunk &output, const std::function<unique_ptr<ArrowArrayWrapper>()> &next_batch) {
@@ -349,6 +361,98 @@ void MakeSortKeys(const PartialSortBindData &data, DataChunk &chunk, Vector &key
     CreateSortKeyHelpers::CreateSortKey(key_chunk, data.modifiers, keys);
 }
 
+struct LocalSortConcurrency {
+    std::mutex mutex;
+    idx_t active = 0;
+    idx_t peak = 0;
+};
+
+class LocalSortTask : public BaseExecutorTask {
+    class ActiveTask {
+    public:
+        explicit ActiveTask(LocalSortConcurrency &state_p) : state(state_p) {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            state.peak = MaxValue(state.peak, ++state.active);
+        }
+
+        ~ActiveTask() {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            --state.active;
+        }
+
+    private:
+        LocalSortConcurrency &state;
+    };
+
+public:
+    LocalSortTask(TaskExecutor &executor, LocalSortConcurrency &concurrency_p, std::function<void()> work_p)
+        : BaseExecutorTask(executor), concurrency(concurrency_p), work(std::move(work_p)) {
+    }
+
+    void ExecuteTask() override {
+        ActiveTask active(concurrency);
+        work();
+    }
+
+    string TaskType() const override {
+        return "AdbcLocalSortTask";
+    }
+
+private:
+    LocalSortConcurrency &concurrency;
+    std::function<void()> work;
+};
+
+class LocalSortWorker {
+public:
+    LocalSortWorker(ClientContext &context_p,
+                    Sort &sort_p,
+                    GlobalSinkState &global_sink_p,
+                    Handle<ArrowSchema> schema,
+                    const PartialSortBindData &data)
+        : context(context_p), sort(sort_p), global_sink(global_sink_p), thread_context(context),
+          cursor(context, std::move(schema)) {
+        cursor.Validate(data.names, data.types);
+        chunk.Initialize(context, data.types);
+        ExecutionContext execution(context, thread_context, nullptr);
+        local_sink = sort.GetLocalSinkState(execution);
+    }
+
+    void SinkBatch(shared_ptr<ArrowArrayWrapper> batch, idx_t begin, idx_t end) {
+        cursor.SetBatch(std::move(batch), begin);
+        ExecutionContext execution(context, thread_context, nullptr);
+        OperatorSinkInput input{global_sink, *local_sink, interrupt};
+        for (idx_t offset = begin; offset < end;) {
+            context.InterruptCheck();
+            if (!cursor.Next(chunk, []() { return make_uniq<ArrowArrayWrapper>(); })) {
+                throw InternalException("ADBC local sort exhausted its batch");
+            }
+            D_ASSERT(offset + chunk.size() <= end);
+            offset += chunk.size();
+            sort.Sink(execution, chunk, input);
+        }
+        chunk.Reset();
+        cursor.ReleaseBatch();
+    }
+
+    void Combine() {
+        context.InterruptCheck();
+        ExecutionContext execution(context, thread_context, nullptr);
+        OperatorSinkCombineInput input{global_sink, *local_sink, interrupt};
+        sort.Combine(execution, input);
+    }
+
+private:
+    ClientContext &context;
+    Sort &sort;
+    GlobalSinkState &global_sink;
+    ThreadContext thread_context;
+    InterruptState interrupt;
+    ArrowCursor cursor;
+    DataChunk chunk;
+    unique_ptr<LocalSinkState> local_sink;
+};
+
 class PartialSortState : public GlobalTableFunctionState {
 public:
     using Clock = std::chrono::steady_clock;
@@ -455,6 +559,109 @@ public:
         return batch;
     }
 
+    void SortLocalQuery(AdbcQuery &query) {
+        auto thread_count = MaxValue<idx_t>(1, TaskScheduler::GetScheduler(context).NumberOfThreads());
+        if (thread_count == 1) {
+            LocalSortWorker local(context, *sort, *sort_sink, query.GetSchema(), data);
+            for (;;) {
+                CheckWorker();
+                auto batch = query.Next();
+                if (!batch->arrow_array.release) {
+                    break;
+                }
+                auto count = NumericCast<idx_t>(batch->arrow_array.length);
+                if (!count) {
+                    continue;
+                }
+                local_rows += count;
+                local_sort_workers = 1;
+                local.SinkBatch(shared_ptr<ArrowArrayWrapper>(batch.release()), 0, count);
+            }
+            local.Combine();
+            local_sort_concurrency.peak = local_rows ? 1 : 0;
+            return;
+        }
+
+        {
+            ArrowCursor cursor(context, query.GetSchema());
+            cursor.Validate(data.names, data.types);
+        }
+        vector<unique_ptr<LocalSortWorker>> locals;
+        // The executor drains on every exit before the worker states are destroyed.
+        TaskExecutor executor(context);
+        bool exhausted = false;
+        while (!exhausted) {
+            CheckWorker();
+            auto batch = query.Next();
+            if (!batch->arrow_array.release) {
+                break;
+            }
+            auto count = NumericCast<idx_t>(batch->arrow_array.length);
+            if (!count) {
+                continue;
+            }
+            // Read ahead one batch while the preceding batch is being sunk.
+            executor.WorkOnTasks();
+            CheckWorker();
+            vector<shared_ptr<ArrowArrayWrapper>> batches;
+            batches.emplace_back(batch.release());
+            local_rows += count;
+            auto chunks = (count + STANDARD_VECTOR_SIZE - 1) / STANDARD_VECTOR_SIZE;
+            // Small driver batches should not limit the number of sort workers.
+            while (batches.size() < thread_count && chunks < thread_count * 8) {
+                CheckWorker();
+                auto next = query.Next();
+                if (!next->arrow_array.release) {
+                    exhausted = true;
+                    break;
+                }
+                auto next_count = NumericCast<idx_t>(next->arrow_array.length);
+                if (next_count) {
+                    local_rows += next_count;
+                    chunks += (next_count + STANDARD_VECTOR_SIZE - 1) / STANDARD_VECTOR_SIZE;
+                    batches.emplace_back(next.release());
+                }
+            }
+            auto workers = MinValue(thread_count, chunks);
+            while (locals.size() < workers) {
+                locals.push_back(make_uniq<LocalSortWorker>(context, *sort, *sort_sink, query.GetSchema(), data));
+            }
+            local_sort_workers = MaxValue(local_sort_workers, workers);
+            for (idx_t i = 0; i < workers; ++i) {
+                auto begin = chunks * i / workers;
+                auto end = chunks * (i + 1) / workers;
+                auto &local = *locals[i];
+                executor.ScheduleTask(
+                    make_uniq<LocalSortTask>(executor, local_sort_concurrency, [&local, batches, begin, end]() mutable {
+                        idx_t offset = 0;
+                        for (auto &input : batches) {
+                            auto count = NumericCast<idx_t>(input->arrow_array.length);
+                            auto chunks = (count + STANDARD_VECTOR_SIZE - 1) / STANDARD_VECTOR_SIZE;
+                            auto first = MaxValue(begin, offset);
+                            auto last = MinValue(end, offset + chunks);
+                            if (first < last) {
+                                local.SinkBatch(std::move(input),
+                                                (first - offset) * STANDARD_VECTOR_SIZE,
+                                                MinValue(count, (last - offset) * STANDARD_VECTOR_SIZE));
+                            } else {
+                                input.reset();
+                            }
+                            offset += chunks;
+                        }
+                        batches.clear();
+                    }));
+            }
+        }
+        executor.WorkOnTasks();
+        CheckWorker();
+        for (auto &local : locals) {
+            executor.ScheduleTask(
+                make_uniq<LocalSortTask>(executor, local_sort_concurrency, [&worker = *local]() { worker.Combine(); }));
+        }
+        executor.WorkOnTasks();
+        CheckWorker();
+    }
+
     void Initialize() {
         string local_sql = data.Select();
         string remote_sql;
@@ -505,21 +712,9 @@ public:
             sort = CreateLocalSort(context, data);
             sort_sink = sort->GetGlobalSinkState(context);
             ExecutionContext execution(context, thread_context, nullptr);
-            auto local_sink = sort->GetLocalSinkState(execution);
-            OperatorSinkInput sink_input{*sort_sink, *local_sink, interrupt};
             local_query->Execute(local_sql);
-            ArrowCursor cursor(context, local_query->GetSchema());
-            cursor.Validate(data.names, data.types);
-            DataChunk chunk;
-            chunk.Initialize(context, data.types);
-            while (cursor.Next(chunk, [&]() { return local_query->Next(); })) {
-                CheckWorker();
-                local_rows += chunk.size();
-                sort->Sink(execution, chunk, sink_input);
-            }
+            SortLocalQuery(*local_query);
             CheckWorker();
-            OperatorSinkCombineInput combine{*sort_sink, *local_sink, interrupt};
-            sort->Combine(execution, combine);
             OperatorSinkFinalizeInput finalize{*sort_sink, interrupt};
             sort->Finalize(context, finalize);
             local_finished = Clock::now();
@@ -613,6 +808,8 @@ public:
         metrics.rows_scanned = local_rows + remote_rows;
         metrics.AddExtraInfo("Local Rows", std::to_string(local_rows));
         metrics.AddExtraInfo("Remote Rows", std::to_string(remote_rows));
+        metrics.AddExtraInfo("Local Sort Workers", std::to_string(local_sort_workers));
+        metrics.AddExtraInfo("Peak Active Local Sort Tasks", std::to_string(local_sort_concurrency.peak));
         metrics.AddExtraInfo("Queue High Watermark", std::to_string(queue_high_water));
         metrics.AddExtraInfo("Bounds Seconds", std::to_string(bounds_seconds));
         if (local_finished != Clock::time_point()) {
@@ -646,6 +843,8 @@ private:
     bool initialized = false;
     bool local_done = false;
     idx_t local_rows = 0;
+    idx_t local_sort_workers = 0;
+    LocalSortConcurrency local_sort_concurrency;
     idx_t remote_rows = 0;
     idx_t queue_high_water = 0;
     double bounds_seconds = 0;

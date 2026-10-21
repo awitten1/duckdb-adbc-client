@@ -256,7 +256,9 @@ The function uses SQL with double-quoted identifiers, `LIMIT 1` for schema disco
 
 This is an experimental function for **unchanged tables and schemas throughout binding and execution**. It does not establish a shared snapshot between connections. Each invocation uses isolated ADBC connections; its internal read concurrency does not enable general concurrent ADBC operations elsewhere in the extension. Partition expressions and composite range boundaries are unsupported. There is no filter/projection pushdown or automatic optimizer rewrite. The function emits an ordered stream, but joins, aggregates, and other order-changing SQL operations may discard that order. An outer `ORDER BY` still performs a normal DuckDB sort.
 
-The local sort uses DuckDB's memory manager and can spill to disk. The remote queue holds at most two Arrow batches, plus one in transfer, with additional memory for active conversion/output buffers. Arrow/driver buffers are additional to DuckDB's `memory_limit`. Cancellation and early `LIMIT` perform cooperative cleanup: queue waits are interrupted, but cleanup can wait for an in-flight ADBC driver call. Configure appropriate server/network timeouts for your environment.
+The local sort uses DuckDB's memory manager and can spill to disk. With `SET threads=N`, local Arrow conversion and sorting use up to N tasks on DuckDB's scheduler, each with its own sort state. Local input is read on one thread and shared as immutable batch slices; at most N local input batches are grouped for processing, plus one read ahead. The sorted local runs and remote stream are merged on the single output thread. The remote queue holds at most two Arrow batches, plus one in transfer, with additional memory for active conversion/output buffers. Arrow/driver buffers are additional to DuckDB's `memory_limit`. Cancellation and early `LIMIT` perform cooperative cleanup: local tasks are drained before their state is released and queue waits are interrupted, but cleanup can wait for an in-flight ADBC driver call. Configure appropriate server/network timeouts for your environment.
+
+Profiling reports `Local Sort Workers` and `Peak Active Local Sort Tasks`. The peak counts overlapping task lifetimes, not CPU utilization. The local read and final merge remain sequential; configuring N threads does not guarantee that all N CPUs stay busy.
 
 ### Automatic partitions and concurrent remote sorts
 
@@ -278,6 +280,9 @@ Completed remote results and individually sorted local partitions are stored in 
 Profiling includes generated/local/remote partition counts, local/remote row counts, peak active remote queries, per-worker queue watermark, bounds duration, and intermediate merge passes. Equal-key ordering is unspecified; duplicates are preserved. This function has no automatic optimizer rewrite or filter/projection pushdown.
 
 ### Testing and benchmarking partial sort
+
+For separate CPU sets and memory limits on this benchmark machine, see
+[benchmark cgroups](scripts/benchmark_cgroups.md).
 
 For a persistent local demo, run:
 
