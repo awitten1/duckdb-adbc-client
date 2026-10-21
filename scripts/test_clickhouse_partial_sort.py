@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import filecmp
 import json
 import os
 from pathlib import Path
@@ -231,6 +232,83 @@ class PartialSortTests(unittest.TestCase):
         self.assertEqual(len(rows), 5)
         self.assertEqual(len(h.rows(f"SELECT * FROM {function} WHERE id < 10")), 10)
 
+    def test_local_sort_thread_settings(self):
+        h = self.harness
+        h.create(
+            "threaded",
+            "id UInt64, score Nullable(Int64), payload String, items Array(Int32)",
+        )
+        h.execute(
+            f"INSERT INTO {h.source('threaded')} SELECT number, "
+            "if(number % 17 = 0, NULL, toInt64(number * 7919 % 1009)), "
+            "concat(toString(number), repeat('x', number % 257)), "
+            "[toInt32(number), -toInt32(number)] FROM numbers(250003)"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            expected = Path(temporary) / "expected.csv"
+            h.run(
+                "SET threads=1; COPY (SELECT * FROM "
+                + h.read(f"SELECT * FROM {h.source('threaded')}")
+                + f" ORDER BY score DESC NULLS FIRST, id) TO {literal(expected)} (FORMAT CSV)"
+            )
+            for threads in (1, 4):
+                for ratio in ("0", "0.5", "1"):
+                    with self.subTest(threads=threads, ratio=ratio):
+                        actual = Path(temporary) / f"actual-{threads}-{ratio}.csv"
+                        profile = Path(temporary) / "profile.json"
+                        function = h.function(
+                            "threaded",
+                            ratio,
+                            descending=[True, False],
+                            nulls_first=[True, False],
+                        )
+                        h.run(
+                            f"SET threads={threads}; SET memory_limit='64MB'; "
+                            f"SET debug_force_external={'true' if threads > 1 else 'false'}; "
+                            f"PRAGMA enable_profiling='json'; SET profiling_output={literal(profile)}; "
+                            f"COPY (SELECT * FROM {function}) TO {literal(actual)} (FORMAT CSV)"
+                        )
+                        self.assertTrue(filecmp.cmp(expected, actual, shallow=False))
+                        metrics = json.loads(profile.read_text())
+                        extra = find_partial_sort_metrics(metrics)
+                        if not h.partitioned:
+                            workers = int(extra["Local Sort Workers"])
+                            active = int(extra["Peak Active Local Sort Tasks"])
+                            if ratio == "1":
+                                self.assertEqual((workers, active), (0, 0))
+                            elif threads == 1:
+                                self.assertEqual((workers, active), (1, 1))
+                            else:
+                                self.assertEqual(workers, threads)
+                                self.assertGreater(active, 1)
+                                self.assertLessEqual(active, threads)
+                        if not h.partitioned and threads > 1 and ratio == "0":
+                            self.assertGreater(
+                                system_metric(metrics, "peak_temp_dir_size"), 0
+                            )
+
+        if not h.partitioned:
+            function = h.function("threaded", "0")
+            result = h.run(
+                f"SET threads=4; SET memory_limit='1MB'; SELECT count(*) FROM {function}",
+                check=False,
+                timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("out of memory", result.stderr.lower())
+            result = h.run(
+                f"PREPARE interrupted AS SELECT count(*) FROM {function}; "
+                "SET threads=4; SET max_execution_time=25; EXECUTE interrupted",
+                check=False,
+                timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("maximum execution time", result.stderr.lower())
+            self.assertEqual(
+                h.rows(f"SET threads=4; SELECT count(*) AS n FROM {function}"),
+                [{"n": 250003}],
+            )
+
     def test_read_adbc_full_remote_sort(self):
         h = self.harness
         query = (
@@ -346,10 +424,18 @@ class PartialSortTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temporary:
             profile = Path(temporary) / "profile.json"
-            for force_external in (False, True):
-                with self.subTest(force_external=force_external):
+            for threads, force_external in (
+                (1, False),
+                (1, True),
+                (4, False),
+                (4, True),
+            ):
+                with self.subTest(threads=threads, force_external=force_external):
+                    # Native DuckDB sorting also needs more than 64MB for four
+                    # workers on this payload; retain the 64MB serial coverage.
+                    memory_limit = "64MB" if threads == 1 else "128MB"
                     query = (
-                        "SET memory_limit='64MB'; SET threads=1; "
+                        f"SET memory_limit='{memory_limit}'; SET threads={threads}; "
                         f"SET debug_force_external={'true' if force_external else 'false'}; "
                         f"PRAGMA enable_profiling='json'; SET profiling_output={literal(profile)}; "
                         f"COPY (SELECT * FROM {h.function('large')}) TO {literal(os.devnull)} (FORMAT CSV)"
