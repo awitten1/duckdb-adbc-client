@@ -17,7 +17,8 @@ usage() {
 Usage: scripts/demo_clickhouse_partial_sort.sh [options]
 
 Start ClickHouse in Docker, generate an events dataset through ADBC, and print
-the extension LOAD command and one minimal query. The container and dataset
+the extension LOAD command, a partial-sort query, and a ClickHouse-sort query.
+The container and dataset
 remain available after the script exits. Reruns reuse an existing dataset.
 
 Options:
@@ -151,7 +152,12 @@ create = (
     + "SELECT * FROM " + function() + " LIMIT 10;\n"
 )
 (directory / "init.sql").write_text(load)
-(directory / "examples.sql").write_text(load + "\nSELECT * FROM " + function() + " LIMIT 10;\n")
+remote_query = f"SELECT * FROM {source} ORDER BY score ASC NULLS LAST"
+(directory / "examples.sql").write_text(
+    load
+    + "\nSELECT * FROM " + function() + " LIMIT 10;\n"
+    + f"\nSELECT * FROM read_adbc(\n    {profile},\n    {sql(remote_query)}\n) LIMIT 10;\n"
+)
 PY
 
 ready=false

@@ -216,6 +216,34 @@ class PartialSortTests(unittest.TestCase):
         self.assertEqual(len(rows), 5)
         self.assertEqual(len(h.rows(f"SELECT * FROM {function} WHERE id < 10")), 10)
 
+    def test_read_adbc_full_remote_sort(self):
+        h = self.harness
+        query = (
+            "SELECT toInt64(number) AS id, toInt64(1000000-number) AS score, "
+            "repeat('x',128) AS payload FROM numbers(1000000) ORDER BY score ASC NULLS LAST"
+        )
+        source = h.read(query)
+        # Fully consume a result large enough to keep the HTTP session active.
+        h.run(f"COPY (SELECT * FROM {source}) TO {literal(os.devnull)} (FORMAT CSV)")
+        self.assertEqual(
+            h.rows(f"SELECT id, score FROM {source} LIMIT 2"),
+            [{"id": 999999, "score": 1}, {"id": 999998, "score": 2}],
+        )
+        self.assertEqual(
+            h.rows(
+                f"PREPARE full_sort AS SELECT count(*) AS n, sum(id)::BIGINT AS total FROM {source}; "
+                "EXECUTE full_sort; EXECUTE full_sort"
+            ),
+            [{"n": 1000000, "total": 499999500000}],
+        )
+        self.assertEqual(
+            h.rows(
+                f"PREPARE preview AS SELECT id, score FROM {source} LIMIT 2; "
+                "EXECUTE preview; EXECUTE preview"
+            ),
+            [{"id": 999999, "score": 1}, {"id": 999998, "score": 2}],
+        )
+
     def test_quoted_identifiers_and_composite_storage_key(self):
         h = self.harness
         table = 'table "quoted"'
