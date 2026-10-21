@@ -220,6 +220,118 @@ D CALL adbc_clear_cache();
 └─────────┘
 ```
 
+## Experimental ADBC partial sort
+
+`read_adbc_partial_sort` divides a SQL table's integer key range between the remote database and DuckDB. Both subsets are transferred as Arrow streams through ADBC. The remote database sorts the upper range while DuckDB reads and sorts the lower range; the function merges their ordered results. Schema discovery and range bounds also use ADBC. The function does not query database-specific system catalogs or require physical-key metadata.
+
+For example, using ClickHouse:
+
+```toml
+# clickhouse.toml
+profile_version = 1
+driver = "clickhouse"
+
+[Options]
+uri = "http://localhost:8123/"
+```
+
+```sql
+SELECT * FROM read_adbc_partial_sort(
+    'profile://./clickhouse.toml', 'default', 'events',
+    partition_key := 'id',
+    sort_columns := ['score', 'id'],
+    descending := [true, false],
+    nulls_first := [false, false],
+    pushdown_ratio := 0.3
+);
+```
+
+The positional arguments are the ADBC profile URI, schema or database name, and table name. Pass `''` for the second argument to use an unqualified table name. For example, a SQLite profile can use `'main'` or `''`; a PostgreSQL profile would typically use `'public'`.
+
+Partition and output sort keys must be signed or unsigned integers up to 64 bits; NULLs are supported. Other source columns are returned unchanged. Any such integer column can be the partition key. Choosing a leading physical sort key or an indexed column can help the remote database prune range scans; matching the output ordering to physical ordering may also avoid a remote sort. These are performance choices, not correctness requirements, and are not validated by the function. `descending` and `nulls_first` default to all `false`; supplied lists must match `sort_columns` in length. Column names are exact, case-sensitive source names.
+
+The function uses SQL with double-quoted identifiers, `LIMIT 1` for schema discovery, `MIN`/`MAX`/`COUNT`, range predicates, and `ORDER BY ... NULLS FIRST/LAST`. The driver must support SQL queries returning Arrow streams and independent connections used concurrently; the database must support this SQL dialect and return integer keys with compatible ordering. Drivers that infer types from result values must return consistent Arrow column types for schema discovery and both branches; mismatches raise an error. ADBC alone does not guarantee these capabilities. Integration tests cover SQLite and ClickHouse; other backends may need SQL-dialect changes.
+
+**The ratio measures key-range width, not row count.** For minimum 0 and maximum 999999, ratio 0.3 selects `id >= 700000` for the remote database and `id < 700000` for DuckDB. More generally, the inclusive width is `max - min + 1`; the remote database receives the upper `floor(width * ratio)` values. Sparse or skewed keys can produce uneven row counts. Ratios use `DECIMAL(10,9)` precision and widened integer arithmetic, including the full `UInt64` range. NULL partition keys go to DuckDB for intermediate ratios. Ratio 0 sorts everything locally; ratio 1 sorts everything remotely.
+
+This is an experimental function for **unchanged tables and schemas throughout binding and execution**. It does not establish a shared snapshot between connections. Each invocation uses isolated ADBC connections; its internal read concurrency does not enable general concurrent ADBC operations elsewhere in the extension. Partition expressions and composite range boundaries are unsupported. There is no filter/projection pushdown or automatic optimizer rewrite. The function emits an ordered stream, but joins, aggregates, and other order-changing SQL operations may discard that order. An outer `ORDER BY` still performs a normal DuckDB sort.
+
+The local sort uses DuckDB's memory manager and can spill to disk. With `SET threads=N`, local Arrow conversion and sorting use up to N tasks on DuckDB's scheduler, each with its own sort state. Local input is read on one thread and shared as immutable batch slices; at most N local input batches are grouped for processing, plus one read ahead. The sorted local runs and remote stream are merged on the single output thread. The remote queue holds at most two Arrow batches, plus one in transfer, with additional memory for active conversion/output buffers. Arrow/driver buffers are additional to DuckDB's `memory_limit`. Cancellation and early `LIMIT` perform cooperative cleanup: local tasks are drained before their state is released and queue waits are interrupted, but cleanup can wait for an in-flight ADBC driver call. Configure appropriate server/network timeouts for your environment.
+
+Profiling reports `Local Sort Workers` and `Peak Active Local Sort Tasks`. The peak counts overlapping task lifetimes, not CPU utilization. The local read and final merge remain sequential; configuring N threads does not guarantee that all N CPUs stay busy.
+
+### Automatic partitions and concurrent remote sorts
+
+`read_adbc_partitioned_sort` creates contiguous ranges from the partition key's minimum and maximum, sorts selected ranges concurrently in the remote database, sorts the others in DuckDB, and performs a k-way merge. All discovery and transfer use ADBC; no database-specific partition metadata or caller-supplied predicates are needed.
+
+```sql
+SELECT * FROM read_adbc_partitioned_sort(
+    'profile://./clickhouse.toml', 'default', 'events',
+    partition_key := 'id', sort_columns := ['score'], pushdown_ratio := 0.3
+);
+```
+
+Optional `partition_count` (default `20`) and `max_remote_concurrency` (default `4`) must be positive integers. The effective range count `P` is the smaller of `partition_count` and the inclusive integer key-range width. Boundaries use `min + floor(j * width / P)`; the last `floor(P * pushdown_ratio)` ranges are remotely sorted. **Here the ratio counts generated partitions**, unlike `read_adbc_partial_sort`, where it measures key-range width. Empty ranges still count, and sparse or skewed data can produce uneven workloads. With IDs 0–999999, the defaults create 20 ranges and ratio 0.3 sends six ranges to remote sorting, with at most four remote queries active at once. One additional unsorted query can read a local partition concurrently.
+
+NULL partition keys belong to the first range, which is local for ratios below 1. An all-NULL key creates one range, remotely sorted only at ratio 1; an empty source creates none. Partition and output sort-key types, directions, NULL ordering, namespace handling, and the unchanged-source/schema requirement match the original function. Generated ranges are logical ranges and need not coincide with physical storage partitions; choosing a physically ordered or indexed key can help range pruning.
+
+Completed remote results and individually sorted local partitions are stored in DuckDB buffer-managed collections that can spill under `memory_limit`. All ranges are materialized before the first output row, including with an outer `LIMIT`. A merge reads at most 16 runs at once, using spillable intermediate passes when necessary. Each active remote worker has a queue of at most two Arrow batches plus one in transfer. Driver and Arrow buffers remain additional to DuckDB-managed memory, and cancellation can still wait for an in-flight driver call. Each partition uses an isolated connection; no shared snapshot is established.
+
+Profiling includes generated/local/remote partition counts, local/remote row counts, peak active remote queries, per-worker queue watermark, bounds duration, and intermediate merge passes. Equal-key ordering is unspecified; duplicates are preserved. This function has no automatic optimizer rewrite or filter/projection pushdown.
+
+### Testing and benchmarking partial sort
+
+For separate CPU sets and memory limits on this benchmark machine, see
+[benchmark cgroups](scripts/benchmark_cgroups.md).
+
+For a persistent local demo, run:
+
+```sh
+bash scripts/demo_clickhouse_partial_sort.sh
+# Optional: choose a smaller dataset or a different port/container.
+bash scripts/demo_clickhouse_partial_sort.sh --rows 100000 --port 18124 \
+    --container adbc-sort-demo-small --state-dir build/partial-sort-demo-small
+```
+
+The script starts ClickHouse in Docker on a loopback-only port, installs the ClickHouse ADBC driver if needed, and creates a generated events table physically ordered by `id`. All loading and queries use ADBC. On success, it prints the `LOAD` command for the local extension build, minimal queries for both sort functions, and an equivalent `read_adbc` query whose `ORDER BY` runs entirely in ClickHouse. All three queries sort by `score ASC NULLS LAST` and use an outer `LIMIT 10` for previewing; the remote SQL has no limit. No extension `INSTALL` is needed when loading the built file directly. Start DuckDB with `build/release/duckdb -unsigned` and paste the printed SQL. The commands are also saved to `build/partial-sort-demo/examples.sql`, alongside the connection profile and setup logs. The container stays running so the queries work. Reruns reuse the dataset, and different row counts use separate tables. Use `--state-dir` to keep separate sets of generated example files. Run with `--help` for options.
+
+The integration suite creates a unique temporary ClickHouse database and populates it through ADBC-executed SQL. It removes that database after the tests, including setup failures. Use a disposable test server: the test account needs database creation/deletion privileges and access to `SYSTEM FLUSH LOGS` and `system.query_log` for the server-overlap assertion. The table function itself does not need query-log access. Install the ClickHouse driver with `dbc install 'clickhouse=0.1.1'`, build the extension, then run against a ClickHouse 26.8.2.7 server:
+
+```sh
+python3 scripts/test_clickhouse_partial_sort.py --url http://localhost:8123/
+# Or use an existing connection profile:
+python3 scripts/test_clickhouse_partial_sort.py --profile profile://myclickhouse
+# Test just the new function:
+python3 scripts/test_clickhouse_partial_sort.py --url http://localhost:8123/ --mode partitioned
+
+python3 scripts/benchmark_clickhouse_partial_sort.py \
+    --url http://localhost:8123/ --rows 1000000 --repeats 3 \
+    --mode all --ratios 0 0.25 0.5 0.75 1 \
+    --partition-count 20 --max-remote-concurrency 4 \
+    --output /tmp/partial-sort-benchmark.json
+```
+
+Both scripts accept `--duckdb` and `--extension` paths. Set `ADBC_DRIVER_PATH` if your driver installation is outside the driver's standard search locations. A separate ClickHouse CI job runs the integration suite. The ordinary SQL suite also exercises partial sorting with SQLite, without a server or physical-key metadata:
+
+```sh
+./build/release/test/unittest test/sql/sqlite/partial_sort.test
+./build/release/test/unittest test/sql/sqlite/partitioned_sort.test
+```
+
+The benchmark defaults to **all four variants**: `clickhouse` (`read_adbc` with a remote `ORDER BY`), `duckdb` (`read_adbc` without ordering plus a DuckDB `ORDER BY`), `partial` (`read_adbc_partial_sort`), and `partitioned` (`read_adbc_partitioned_sort`). Both table functions run at each requested ratio; the two full-sort baselines run once per repeat and workload because they have no ratio. The defaults cover ratios 0, 0.25, 0.5, 0.75, and 1, dense/skewed keys, and storage-aligned/unaligned ordering. Each case has one warmup and three measured runs, shuffled within each round using `--seed` (default 0). All variants use identical columns, sort keys, and `ASC NULLS LAST` ordering, with no result limit. COPY consumes every row and its returned count must match the dataset size.
+
+The script prints median timings and writes raw measured/warmup results, SQL, settings, versions, errors, and summaries to JSON (default `build/partial-sort-benchmark.json`). A summary CSV is written alongside it; override its path with `--csv`. Summaries contain min/median/mean/max/standard deviation and speedups relative to both full-sort baselines. Reports are updated after each trial; failed trials are recorded, remaining cases continue, and the script exits unsuccessfully if any trial failed. `--profiles-dir` retains individual measured DuckDB profiles. The script creates and drops its own unique ClickHouse database through ADBC.
+
+Use `--mode clickhouse`, `--mode duckdb`, `--mode partial`, or `--mode partitioned` for one variant; `--mode both` retains the two-table-function comparison. `--ratios` accepts values from 0 to 1 with up to nine decimal places. Other controls include `--warmups`, `--threads` (DuckDB threads, default 1), `--memory-limit`, `--payload-bytes`, `--distributions`, `--orderings`, and `--timeout`. For a quick comparison of all variants:
+
+```sh
+python3 scripts/benchmark_clickhouse_partial_sort.py \
+    --url http://localhost:18123/ --rows 10000 --repeats 1 --warmups 0 \
+    --ratios 0 0.3 1 --distributions dense --orderings unaligned
+```
+
+Wall time includes a fresh CLI process, extension loading, binding/schema discovery, bounds discovery where applicable, full ADBC transfer, sorting/merging, and the same CSV output sink to the null device. It measures end-to-end performance, not isolated server CPU time. DuckDB memory/spill metrics exclude ClickHouse memory and some driver allocations; server settings are recorded without changing them. The original function's branch-active overlap includes I/O and backpressure, not just simultaneous CPU usage. Run benchmark and COPY-based integration suites sequentially: DuckDB locks the shared null-device output. Performance is workload-dependent, and more partitions/connections can add substantial overhead on small datasets.
+
 ## Limitations
 
 ### Autocommit Mode
@@ -252,7 +364,7 @@ The ADBC extension does not currently support connecting to another DuckDB datab
 
 ### Concurrency Within a Single Process
 
-The ADBC extension does not currently support concurrent ADBC operations within a single process.
+Concurrent ADBC operations within a single process are unsupported, except for the isolated read workers inside `read_adbc_partial_sort`.
 
 ### Concurrency Within a Single SQL Statement
 

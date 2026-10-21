@@ -1,0 +1,27 @@
+<clickhouse>
+  <path>./</path>
+  <listen_host>127.0.0.1</listen_host>
+  <http_port>8123</http_port>
+  <tcp_port>9000</tcp_port>
+  <query_log>
+    <database>system</database>
+    <table>query_log</table>
+  </query_log>
+  <processors_profile_log>
+    <database>system</database>
+    <table>processors_profile_log</table>
+  </processors_profile_log>
+  <profiles>
+    <default>
+      <!-- The ClickHouse ADBC 0.1.1 driver requires LZ4 transport compression. -->
+      <network_compression_method>LZ4</network_compression_method>
+    </default>
+  </profiles>
+  <users>
+    <default>
+      <password/>
+      <networks><ip>127.0.0.1</ip></networks>
+      <profile>default</profile>
+    </default>
+  </users>
+</clickhouse>

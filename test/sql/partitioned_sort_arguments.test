@@ -1,0 +1,53 @@
+# name: test/sql/partitioned_sort_arguments.test
+# description: Validate partial-sort arguments before opening ADBC connections
+# group: [adbc]
+
+require adbc
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', 'default', 't')
+----
+requires partition_key
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', 'default', 't', partition_key := 'id', sort_columns := ['id'], pushdown_ratio := -0.1)
+----
+pushdown_ratio must be between 0 and 1
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', 'default', 't', partition_key := 'id', sort_columns := [], pushdown_ratio := 0.5)
+----
+sort_columns must not be empty
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', 'default', 't', partition_key := 'id', sort_columns := ['id'], descending := [true, false], pushdown_ratio := 0.5)
+----
+descending must match the number of sort_columns
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', 'default', 't', partition_key := 'id', sort_columns := ['id'], nulls_first := [NULL], pushdown_ratio := 0.5)
+----
+nulls_first cannot contain NULL
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', '', 't', partition_key := 'id', sort_columns := ['id'], pushdown_ratio := 0.5, partition_count := 0)
+----
+partition_count must be a positive integer
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', '', 't', partition_key := 'id', sort_columns := ['id'], pushdown_ratio := 0.5, max_remote_concurrency := NULL)
+----
+max_remote_concurrency must be a positive integer
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', '', 't', partition_key := 'id', sort_columns := ['id'], pushdown_ratio := 0.5, max_remote_concurrency := -1)
+----
+max_remote_concurrency must be a positive integer
+
+statement ok
+SET enable_external_access = false
+
+statement error
+SELECT * FROM read_adbc_partitioned_sort('profile://unused', 'default', 't', partition_key := 'id', sort_columns := ['id'], pushdown_ratio := 0.5)
+----
+ADBC partial sort requires external access
