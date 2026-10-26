@@ -51,6 +51,10 @@ bash clickhouse/install-clickhouse.sh
 ln -sfn "$repo/build/release/duckdb" "$HOME/.local/bin/duckdb"
 ln -sfn "$repo/clickhouse/.clickhouse/bin/clickhouse" "$HOME/.local/bin/clickhouse"
 ln -sfn "$repo/clickhouse/.clickhouse/bin/clickhouse-client" "$HOME/.local/bin/clickhouse-client"
+# Repair ownership of this profile and its directory if an earlier sudo run created them.
+sudo install -d -o "$(id -u)" -g "$(id -g)" -m 755 "$HOME/.config/adbc/profiles"
+sudo install -o "$(id -u)" -g "$(id -g)" -m 644 \
+    /dev/null "$HOME/.config/adbc/profiles/myclickhouse.toml"
 cat > "$HOME/.config/adbc/profiles/myclickhouse.toml" <<'EOF'
 profile_version = 1
 driver = "clickhouse"
