@@ -30,22 +30,14 @@ node_0 = request.RawPC("node-0")
 node_0.hardware_type = params.hwtype
 node_0.disk_image = "urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU24-64-STD"
 
-setup = """set -euo pipefail
-exec > "$HOME/experiment-setup.log" 2>&1
-setup_script=$(mktemp)
-trap 'rm -f "$setup_script"' EXIT
-curl -fsSL --retry 3 \\
-    https://raw.githubusercontent.com/awitten1/duckdb-adbc-client/feat/clickhouse-partial-sort/scripts/setup_ubuntu_experiments.sh \\
-    -o "$setup_script"
-bash "$setup_script"
-"""
+setup = (
+    "exec bash /local/repository/scripts/setup_ubuntu_experiments.sh "
+    '> "$HOME/experiment-setup.log" 2>&1'
+)
 node_0.addService(
     pg.Execute(
         shell="bash",
         command=(
-            "set -euo pipefail; "
-            "sudo apt-get update; "
-            "sudo apt-get install -y curl ca-certificates; "
             "sudo -H -u "
             + shlex.quote(params.setupUser)
             + " bash -c "

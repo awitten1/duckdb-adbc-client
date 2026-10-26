@@ -14,8 +14,9 @@ Copy the bootstrap script to a fresh host and run it:
 bash setup_ubuntu_experiments.sh
 ```
 
-For CloudLab, use the repository's root `profile.py`. Its startup service
-downloads and invokes this bootstrap automatically. Set the `setupUser`
+For CloudLab, use the repository's root `profile.py`. CloudLab provides a
+checkout at `/local/repository`; the startup service invokes
+`/local/repository/scripts/setup_ubuntu_experiments.sh` directly. Set the `setupUser`
 profile parameter to your CloudLab login (default: `awitt`). Follow progress
 after connecting with `tail -f ~/experiment-setup.log`; setup failures are
 also reported by the CloudLab startup service.
