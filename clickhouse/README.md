@@ -14,6 +14,12 @@ Copy the bootstrap script to a fresh host and run it:
 bash setup_ubuntu_experiments.sh
 ```
 
+For CloudLab, use the repository's root `profile.py`. Its startup service
+downloads and invokes this bootstrap automatically. Set the `setupUser`
+profile parameter to your CloudLab login (default: `awitt`). Follow progress
+after connecting with `tail -f ~/experiment-setup.log`; setup failures are
+also reported by the CloudLab startup service.
+
 It installs build dependencies, [dbc](https://docs.columnar.tech/dbc/getting_started/installation/),
 ClickHouse/SQLite ADBC drivers, and the ClickHouse server/client binary. It
 clones `https://github.com/awitten1/duckdb-adbc-client.git`, branch
