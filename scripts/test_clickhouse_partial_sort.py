@@ -2,15 +2,12 @@
 """ClickHouse integration tests. All setup, metadata and data access use ADBC."""
 
 import argparse
-import csv
 import filecmp
 import json
 import os
 from pathlib import Path
 import subprocess
-import signal
 import tempfile
-import time
 import unittest
 
 
@@ -34,12 +31,11 @@ def sql_list(values):
 
 
 class Harness:
-    def __init__(self, duckdb, extension, profile, database, partitioned=False):
+    def __init__(self, duckdb, extension, profile, database):
         self.duckdb = str(Path(duckdb).resolve())
         self.extension = str(Path(extension).resolve())
         self.profile = profile
         self.database = database
-        self.partitioned = partitioned
 
     def run(self, sql, *, timeout=180, check=True):
         result = subprocess.run(
@@ -79,8 +75,6 @@ class Harness:
         descending=None,
         nulls_first=None,
         partition="id",
-        partition_count=None,
-        max_remote_concurrency=None,
     ):
         options = [
             f"partition_key := {literal(partition)}",
@@ -91,17 +85,8 @@ class Harness:
             options.append(f"descending := {sql_list(descending)}")
         if nulls_first is not None:
             options.append(f"nulls_first := {sql_list(nulls_first)}")
-        if partition_count is not None:
-            options.append(f"partition_count := {partition_count}")
-        if max_remote_concurrency is not None:
-            options.append(f"max_remote_concurrency := {max_remote_concurrency}")
-        name = (
-            "read_adbc_partitioned_sort"
-            if self.partitioned
-            else "read_adbc_partial_sort"
-        )
         return (
-            f"{name}({literal(self.profile)}, {literal(self.database)}, {literal(table)}, "
+            f"read_adbc_partial_sort({literal(self.profile)}, {literal(self.database)}, {literal(table)}, "
             + ", ".join(options)
             + ")"
         )
@@ -232,6 +217,91 @@ class PartialSortTests(unittest.TestCase):
         self.assertEqual(len(rows), 5)
         self.assertEqual(len(h.rows(f"SELECT * FROM {function} WHERE id < 10")), 10)
 
+    def test_projection_pushdown(self):
+        h = self.harness
+        expected = h.rows(
+            f"SELECT * FROM {h.read('SELECT * FROM ' + h.source('events'))} "
+            "ORDER BY score DESC NULLS FIRST, id"
+        )
+        for ratio in ("0", "0.5", "1"):
+            function = h.function(
+                "events", ratio, descending=[True, False], nulls_first=[True, False]
+            )
+            with self.subTest(ratio=ratio):
+                self.assertEqual(
+                    h.rows(f"SELECT payload FROM {function}"),
+                    [{"payload": row["payload"]} for row in expected],
+                )
+                self.assertEqual(
+                    h.rows(f"SELECT payload, score, payload AS again FROM {function}"),
+                    [
+                        {
+                            "payload": row["payload"],
+                            "score": row["score"],
+                            "again": row["payload"],
+                        }
+                        for row in expected
+                    ],
+                )
+                self.assertEqual(
+                    h.rows(f"SELECT payload FROM {function} WHERE id < 10"),
+                    [
+                        {"payload": row["payload"]}
+                        for row in expected
+                        if int(row["id"]) < 10
+                    ],
+                )
+                self.assertEqual(
+                    h.rows(f"SELECT count(*) AS n FROM {function}"), [{"n": 12000}]
+                )
+                self.assertEqual(
+                    h.rows(f"SELECT 42 AS value FROM {function} LIMIT 3"),
+                    [{"value": 42}] * 3,
+                )
+                self.assertEqual(
+                    h.rows(
+                        "SET threads=4; SET debug_force_external=true; "
+                        f"PREPARE projected AS SELECT payload FROM {function}; "
+                        "EXECUTE projected; EXECUTE projected"
+                    ),
+                    [{"payload": row["payload"]} for row in expected],
+                )
+
+    def test_remote_projection_queries(self):
+        h = self.harness
+        h.create(
+            "projection_transfer",
+            "id UInt64, score Int64, payload String, unused String, items Array(Int32)",
+        )
+        h.execute(
+            f"INSERT INTO {h.source('projection_transfer')} "
+            "SELECT number, toInt64(100-number), toString(number), repeat('x', 1024), "
+            "[toInt32(number), -toInt32(number)] FROM numbers(100)"
+        )
+        for ratio in ("0", "0.5", "1"):
+            function = h.function("projection_transfer", ratio, keys=("score",))
+            self.assertEqual(
+                h.rows(f"SELECT payload FROM {function}"),
+                [{"payload": str(i)} for i in reversed(range(100))],
+            )
+        h.execute("SYSTEM FLUSH LOGS")
+        prefix = f'SELECT "payload", "score" FROM {h.source("projection_transfer")}'
+        queries = h.rows(
+            "SELECT * FROM "
+            + h.read(
+                "SELECT query FROM system.query_log WHERE type = 'QueryFinish' "
+                f"AND startsWith(query, {literal(prefix)})"
+            )
+        )
+        # All execution reads must transfer only the output and hidden sort key.
+        # The partition key is used in predicates; the large unused payload is absent.
+        self.assertEqual(len(queries), 4)
+        function = h.function("projection_transfer", keys=("score",))
+        self.assertEqual(
+            h.rows(f"SET threads=4; SELECT items FROM {function}"),
+            [{"items": [i, -i]} for i in reversed(range(100))],
+        )
+
     def test_local_sort_thread_settings(self):
         h = self.harness
         h.create(
@@ -271,43 +341,41 @@ class PartialSortTests(unittest.TestCase):
                         self.assertTrue(filecmp.cmp(expected, actual, shallow=False))
                         metrics = json.loads(profile.read_text())
                         extra = find_partial_sort_metrics(metrics)
-                        if not h.partitioned:
-                            workers = int(extra["Local Sort Workers"])
-                            active = int(extra["Peak Active Local Sort Tasks"])
-                            if ratio == "1":
-                                self.assertEqual((workers, active), (0, 0))
-                            elif threads == 1:
-                                self.assertEqual((workers, active), (1, 1))
-                            else:
-                                self.assertEqual(workers, threads)
-                                self.assertGreater(active, 1)
-                                self.assertLessEqual(active, threads)
-                        if not h.partitioned and threads > 1 and ratio == "0":
+                        workers = int(extra["Local Sort Workers"])
+                        active = int(extra["Peak Active Local Sort Tasks"])
+                        if ratio == "1":
+                            self.assertEqual((workers, active), (0, 0))
+                        elif threads == 1:
+                            self.assertEqual((workers, active), (1, 1))
+                        else:
+                            self.assertEqual(workers, threads)
+                            self.assertGreater(active, 1)
+                            self.assertLessEqual(active, threads)
+                        if threads > 1 and ratio == "0":
                             self.assertGreater(
                                 system_metric(metrics, "peak_temp_dir_size"), 0
                             )
 
-        if not h.partitioned:
-            function = h.function("threaded", "0")
-            result = h.run(
-                f"SET threads=4; SET memory_limit='1MB'; SELECT count(*) FROM {function}",
-                check=False,
-                timeout=30,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("out of memory", result.stderr.lower())
-            result = h.run(
-                f"PREPARE interrupted AS SELECT count(*) FROM {function}; "
-                "SET threads=4; SET max_execution_time=25; EXECUTE interrupted",
-                check=False,
-                timeout=30,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("maximum execution time", result.stderr.lower())
-            self.assertEqual(
-                h.rows(f"SET threads=4; SELECT count(*) AS n FROM {function}"),
-                [{"n": 250003}],
-            )
+        function = h.function("threaded", "0")
+        result = h.run(
+            f"SET threads=4; SET memory_limit='1MB'; SELECT count(*) FROM {function}",
+            check=False,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("out of memory", result.stderr.lower())
+        result = h.run(
+            f"PREPARE interrupted AS SELECT count(*) FROM {function}; "
+            "SET threads=4; SET max_execution_time=25; EXECUTE interrupted",
+            check=False,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("maximum execution time", result.stderr.lower())
+        self.assertEqual(
+            h.rows(f"SET threads=4; SELECT count(*) AS n FROM {function}"),
+            [{"n": 250003}],
+        )
 
     def test_read_adbc_full_remote_sort(self):
         h = self.harness
@@ -401,7 +469,7 @@ class PartialSortTests(unittest.TestCase):
             self.assertIn("division", result.stderr.lower())
             if bad_id == 90:
                 self.assertIn(
-                    "remote partition" if h.partitioned else "remote branch",
+                    "remote branch",
                     result.stderr,
                 )
 
@@ -486,188 +554,6 @@ class PartialSortTests(unittest.TestCase):
         self.assertIn("9000", explanation)
 
 
-class PartitionedSortTests(PartialSortTests):
-    def test_profile_overlap_queue_and_spill(self):
-        h = self.harness
-        h.create("large", "id UInt64, score Int64, payload String")
-        h.execute(
-            f"INSERT INTO {h.source('large')} SELECT number, toInt64(1000000-number), repeat('x',128) FROM numbers(1000000)"
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            profile = Path(temporary) / "profile.json"
-            output = Path(temporary) / "sorted.csv"
-            for concurrency, force_external in (
-                (1, False),
-                (2, False),
-                (4, False),
-                (4, True),
-            ):
-                with self.subTest(
-                    concurrency=concurrency, force_external=force_external
-                ):
-                    function = h.function(
-                        "large", partition_count=40, max_remote_concurrency=concurrency
-                    )
-                    destination = output if concurrency == 1 else os.devnull
-                    h.run(
-                        "SET memory_limit='64MB'; SET threads=1; "
-                        f"SET debug_force_external={'true' if force_external else 'false'}; "
-                        f"PRAGMA enable_profiling='json'; SET profiling_output={literal(profile)}; "
-                        f"COPY (SELECT * FROM {function}) TO {literal(destination)} (FORMAT CSV, HEADER false)"
-                    )
-                    data = json.loads(profile.read_text())
-                    extra = find_partial_sort_metrics(data)
-                    self.assertEqual(int(extra["Generated Partitions"]), 40)
-                    self.assertEqual(int(extra["Local Partitions"]), 20)
-                    self.assertEqual(int(extra["Remote Partitions"]), 20)
-                    self.assertEqual(int(extra["Local Rows"]), 500000)
-                    self.assertEqual(int(extra["Remote Rows"]), 500000)
-                    self.assertEqual(
-                        int(extra["Peak Active Remote Queries"]), concurrency
-                    )
-                    self.assertLessEqual(int(extra["Queue High Watermark"]), 2)
-                    self.assertEqual(int(extra["Intermediate Merge Passes"]), 1)
-                    self.assertGreater(system_metric(data, "peak_temp_dir_size"), 0)
-                    if concurrency == 1:
-                        count = 0
-                        with output.open(newline="") as stream:
-                            for count, row in enumerate(csv.reader(stream), 1):
-                                self.assertEqual(
-                                    (int(row[0]), int(row[1]), row[2]),
-                                    (1000000 - count, count, "x" * 128),
-                                )
-                        self.assertEqual(count, 1000000)
-
-        h.execute("SYSTEM FLUSH LOGS")
-        prefix = f'SELECT "id", "score", "payload" FROM {h.source("large")} WHERE'
-        intervals = h.rows(
-            "SELECT * FROM "
-            + h.read(
-                "SELECT toUnixTimestamp64Micro(query_start_time_microseconds) AS start_us, "
-                "query_duration_ms * 1000 AS duration_us FROM system.query_log "
-                f"WHERE type = 'QueryFinish' AND startsWith(query, {literal(prefix)}) "
-                "AND position(query, 'ORDER BY') > 0"
-            )
-        )
-        self.assertEqual(len(intervals), 80)
-        events = []
-        for row in intervals:
-            start = int(row["start_us"])
-            events.extend(((start, 1), (start + int(row["duration_us"]), -1)))
-        active = peak = 0
-        for _, change in sorted(events):
-            active += change
-            peak = max(peak, active)
-        self.assertGreater(peak, 1)
-        self.assertLessEqual(peak, 4)
-
-    def test_partition_counts_and_multiple_merge_passes(self):
-        h = self.harness
-        h.create("small_domain", "id Int64, score Int64")
-        h.execute(f"INSERT INTO {h.source('small_domain')} VALUES (-1,3),(0,2),(1,1)")
-        with tempfile.TemporaryDirectory() as temporary:
-            profile = Path(temporary) / "profile.json"
-            for table, count, ratio, expected in (
-                ("small_domain", 20, "0.3", (3, 0, 0)),
-                ("small_domain", 20, "1", (3, 3, 0)),
-                ("events", 300, "0.3", (300, 90, 2)),
-                ("events", 1, "0.5", (1, 0, 0)),
-            ):
-                with self.subTest(table=table, count=count, ratio=ratio):
-                    function = h.function(
-                        table, ratio, partition_count=count, max_remote_concurrency=2
-                    )
-                    h.run(
-                        f"PRAGMA enable_profiling='json'; SET profiling_output={literal(profile)}; "
-                        f"COPY (SELECT * FROM {function}) TO {literal(os.devnull)} (FORMAT CSV)"
-                    )
-                    extra = find_partial_sort_metrics(json.loads(profile.read_text()))
-                    self.assertEqual(
-                        tuple(
-                            int(extra[key])
-                            for key in (
-                                "Generated Partitions",
-                                "Remote Partitions",
-                                "Intermediate Merge Passes",
-                            )
-                        ),
-                        expected,
-                    )
-                    self.assertEqual(
-                        int(extra["Local Rows"]) + int(extra["Remote Rows"]),
-                        12000 if table == "events" else 3,
-                    )
-        self.assert_matches("small_domain", nulls_first=[True, False])
-
-    def test_partition_options(self):
-        h = self.harness
-        for option in ("partition_count", "max_remote_concurrency"):
-            for value in ("0", "-1", "NULL"):
-                result = h.run(
-                    "SELECT * FROM " + h.function("events", **{option: value}),
-                    check=False,
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("positive integer", result.stderr)
-
-    def test_interrupt_active_workers(self):
-        h = self.harness
-        h.create("cancel", "id UInt64, score Int64")
-        h.execute(
-            f"INSERT INTO {h.source('cancel')} SELECT number, toInt64(1000000-number) FROM numbers(1000000)"
-        )
-        # Delay actual range reads so the interrupt reaches active workers.
-        h.execute(
-            f"ALTER TABLE {h.source('cancel')} ADD COLUMN payload String "
-            "DEFAULT concat(repeat('x',128), toString(sleepEachRow(0.00001)))"
-        )
-        function = h.function("cancel", "1")
-        process = subprocess.Popen(
-            [h.duckdb, "-unsigned", "-batch", "-bail", "-no-agent"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            process.stdin.write(
-                f"LOAD {literal(h.extension)}; "
-                f"COPY (SELECT * FROM {function}) TO {literal(os.devnull)} (FORMAT CSV);\n"
-            )
-            process.stdin.close()
-            process.stdin = None
-            prefix = f'SELECT "id", "score", "payload" FROM {h.source("cancel")} WHERE'
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                rows = h.rows(
-                    "SELECT * FROM "
-                    + h.read(
-                        f"SELECT count(*) AS n FROM system.processes WHERE startsWith(query, {literal(prefix)}) "
-                        "AND position(query, 'ORDER BY') > 0"
-                    )
-                )
-                if int(rows[0]["n"]) > 0:
-                    break
-                self.assertIsNone(
-                    process.poll(), "Query finished before the interruption check"
-                )
-                time.sleep(0.05)
-            else:
-                self.fail("No active remote partition query observed")
-            process.send_signal(signal.SIGINT)
-            process.communicate(timeout=30)
-            # The shell suppresses printing once interrupted. A normal error
-            # exit (rather than termination by SIGINT) verifies its cleanup path.
-            self.assertEqual(process.returncode, 1)
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.communicate()
-        self.assertEqual(
-            h.rows(f"SELECT count(*) AS n FROM {h.function('events')}"), [{"n": 12000}]
-        )
-
-
 def find_partial_sort_metrics(node):
     extra = node.get("extra_info", {})
     if "Local Rows" in extra:
@@ -698,9 +584,6 @@ def arguments():
         "--url", default=os.environ.get("ADBC_CLICKHOUSE_URL", "http://localhost:8123/")
     )
     parser.add_argument(
-        "--mode", choices=("partial", "partitioned", "both"), default="both"
-    )
-    parser.add_argument(
         "--test", action="append", help="Run only this test method (repeatable)"
     )
     return parser.parse_args()
@@ -718,27 +601,16 @@ def main():
             path.chmod(0o600)
             profile = "profile://" + str(path)
         suite = unittest.TestSuite()
-        for test_class, partitioned in (
-            (PartialSortTests, False),
-            (PartitionedSortTests, True),
-        ):
-            mode = "partitioned" if partitioned else "partial"
-            if args.mode not in (mode, "both"):
-                continue
-            test_class.harness = Harness(
-                args.duckdb,
-                args.extension,
-                profile,
-                f"adbc_partial_sort_test_{os.getpid()}_{mode}",
-                partitioned=partitioned,
-            )
-            names = args.test or unittest.defaultTestLoader.getTestCaseNames(test_class)
-            # This generic read_adbc regression only needs to run once.
-            if partitioned and not args.test:
-                names = [
-                    name for name in names if name != "test_read_adbc_full_remote_sort"
-                ]
-            suite.addTests(test_class(name) for name in names)
+        PartialSortTests.harness = Harness(
+            args.duckdb,
+            args.extension,
+            profile,
+            f"adbc_partial_sort_test_{os.getpid()}_partial",
+        )
+        names = args.test or unittest.defaultTestLoader.getTestCaseNames(
+            PartialSortTests
+        )
+        suite.addTests(PartialSortTests(name) for name in names)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         raise SystemExit(0 if result.wasSuccessful() else 1)
 

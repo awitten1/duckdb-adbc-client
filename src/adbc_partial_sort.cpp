@@ -2,7 +2,6 @@
 #include "adbc_util.hpp"
 
 #include "duckdb/common/sorting/sort.hpp"
-#include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -17,7 +16,6 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
-#include <queue>
 #include <thread>
 
 namespace duckdb {
@@ -176,8 +174,6 @@ struct PartialSortBindData : public TableFunctionData {
     vector<idx_t> sort_columns;
     vector<OrderModifiers> modifiers;
     int64_t ratio;
-    idx_t partition_count = 20;
-    idx_t max_remote_concurrency = 4;
 
     string Source() const {
         return (database.empty() ? "" : QuoteIdentifier(database) + ".") + QuoteIdentifier(table);
@@ -201,6 +197,56 @@ struct PartialSortBindData : public TableFunctionData {
         }
         return " ORDER BY " + StringUtil::Join(columns, ", ");
     }
+};
+
+// The bound schema describes the whole table. Each execution owns a narrower
+// layout containing the requested columns and any hidden keys needed by the merge.
+struct ProjectedSortData : public PartialSortBindData {
+    ProjectedSortData(const PartialSortBindData &bound, const vector<column_t> &requested)
+        : PartialSortBindData(bound) {
+        names.clear();
+        types.clear();
+        sort_columns.clear();
+        vector<idx_t> mapping(bound.types.size(), DConstants::INVALID_INDEX);
+        auto add_column = [&](idx_t column) {
+            if (column >= bound.types.size()) {
+                throw InternalException("ADBC partial sort: invalid projected column");
+            }
+            if (mapping[column] == DConstants::INVALID_INDEX) {
+                mapping[column] = names.size();
+                names.push_back(bound.names[column]);
+                types.push_back(bound.types[column]);
+            }
+            return mapping[column];
+        };
+        for (auto column : requested) {
+            if (column == COLUMN_IDENTIFIER_ROW_ID || column == COLUMN_IDENTIFIER_EMPTY) {
+                // COUNT(*) and constant projections only need the row cardinality.
+                output_columns.push_back(DConstants::INVALID_INDEX);
+            } else {
+                output_columns.push_back(add_column(column));
+            }
+        }
+        for (auto column : bound.sort_columns) {
+            sort_columns.push_back(add_column(column));
+        }
+    }
+
+    void Project(DataChunk &internal, DataChunk &output) const {
+        D_ASSERT(output.ColumnCount() == output_columns.size());
+        output.Reset();
+        for (idx_t i = 0; i < output_columns.size(); ++i) {
+            if (output_columns[i] == DConstants::INVALID_INDEX) {
+                output.data[i].SetVectorType(VectorType::CONSTANT_VECTOR);
+                ConstantVector::SetNull(output.data[i], true);
+            } else {
+                output.data[i].Reference(internal.data[output_columns[i]]);
+            }
+        }
+        output.SetChildCardinality(internal.size());
+    }
+
+    vector<idx_t> output_columns;
 };
 
 Value Required(TableFunctionBindInput &input, const string &name) {
@@ -245,11 +291,10 @@ vector<bool> ReadFlags(TableFunctionBindInput &input, const string &name, idx_t 
     return flags;
 }
 
-unique_ptr<FunctionData> BindSort(ClientContext &context,
-                                  TableFunctionBindInput &input,
-                                  vector<LogicalType> &types,
-                                  vector<Identifier> &names,
-                                  bool partitioned) {
+unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
+                                         TableFunctionBindInput &input,
+                                         vector<LogicalType> &types,
+                                         vector<Identifier> &names) {
     if (!Settings::Get<EnableExternalAccessSetting>(context)) {
         throw PermissionException("ADBC partial sort requires external access");
     }
@@ -276,19 +321,6 @@ unique_ptr<FunctionData> BindSort(ClientContext &context,
     }
     auto descending = ReadFlags(input, "descending", columns.size());
     auto nulls_first = ReadFlags(input, "nulls_first", columns.size());
-    if (partitioned) {
-        auto read_count = [&](const string &name, idx_t &target) {
-            auto it = input.named_parameters.find(Identifier(name));
-            if (it != input.named_parameters.end()) {
-                if (it->second.IsNull() || it->second.GetValue<int64_t>() <= 0) {
-                    throw BinderException("%s must be a positive integer", name);
-                }
-                target = NumericCast<idx_t>(it->second.GetValue<int64_t>());
-            }
-        };
-        read_count("partition_count", data->partition_count);
-        read_count("max_remote_concurrency", data->max_remote_concurrency);
-    }
 
     AdbcQuery query(data->uri);
     // Some drivers infer Arrow types from result rows rather than declared SQL types.
@@ -317,20 +349,6 @@ unique_ptr<FunctionData> BindSort(ClientContext &context,
     types = data->types;
     names = StringsToIdentifiers(data->names);
     return std::move(data);
-}
-
-unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
-                                         TableFunctionBindInput &input,
-                                         vector<LogicalType> &types,
-                                         vector<Identifier> &names) {
-    return BindSort(context, input, types, names, false);
-}
-
-unique_ptr<FunctionData> BindPartitionedSort(ClientContext &context,
-                                             TableFunctionBindInput &input,
-                                             vector<LogicalType> &types,
-                                             vector<Identifier> &names) {
-    return BindSort(context, input, types, names, true);
 }
 
 unique_ptr<Sort> CreateLocalSort(ClientContext &context, const PartialSortBindData &data) {
@@ -456,9 +474,10 @@ private:
 class PartialSortState : public GlobalTableFunctionState {
 public:
     using Clock = std::chrono::steady_clock;
-    PartialSortState(ClientContext &context_p, const PartialSortBindData &data_p)
-        : context(context_p), data(data_p), thread_context(context), local_keys(LogicalType::BLOB),
+    PartialSortState(ClientContext &context_p, const PartialSortBindData &data_p, const vector<column_t> &columns)
+        : context(context_p), data(data_p, columns), thread_context(context), local_keys(LogicalType::BLOB),
           remote_keys(LogicalType::BLOB) {
+        merged_chunk.Initialize(context, data.types);
         local_chunk.Initialize(context, data.types);
         remote_chunk.Initialize(context, data.types);
     }
@@ -779,7 +798,7 @@ public:
         return comparison < 0 || (comparison == 0 && left.GetSize() <= right.GetSize());
     }
 
-    void Scan(DataChunk &output) {
+    void ScanInternal(DataChunk &output) {
         if (!initialized) {
             Initialize();
         }
@@ -801,6 +820,12 @@ public:
                      (!have_local || !have_remote || LocalFirst() == take_local));
             output.Append(chunk, selection, count);
         }
+    }
+
+    void Scan(DataChunk &output) {
+        merged_chunk.Reset();
+        ScanInternal(merged_chunk);
+        data.Project(merged_chunk, output);
     }
 
     void Metrics(OperatorMetrics &metrics) {
@@ -826,7 +851,7 @@ public:
 
 private:
     ClientContext &context;
-    const PartialSortBindData &data;
+    ProjectedSortData data;
     ThreadContext thread_context;
     InterruptState interrupt;
     unique_ptr<Sort> sort;
@@ -834,6 +859,7 @@ private:
     unique_ptr<GlobalSourceState> sort_source;
     unique_ptr<LocalSourceState> sort_local_source;
     unique_ptr<ArrowCursor> remote_cursor;
+    DataChunk merged_chunk;
     DataChunk local_chunk;
     DataChunk remote_chunk;
     Vector local_keys;
@@ -864,7 +890,7 @@ private:
 };
 
 unique_ptr<GlobalTableFunctionState> InitPartialSort(ClientContext &context, TableFunctionInitInput &input) {
-    return make_uniq<PartialSortState>(context, input.bind_data->Cast<PartialSortBindData>());
+    return make_uniq<PartialSortState>(context, input.bind_data->Cast<PartialSortBindData>(), input.column_ids);
 }
 
 void ScanPartialSort(ClientContext &context, TableFunctionInput &input, DataChunk &output) {
@@ -884,545 +910,34 @@ void PartialSortMetrics(TableFunctionGetMetricsInput &input) {
 }
 
 
-// A bounded fan-in merge keeps one scan chunk and encoded key vector per input.
-class PartitionRunMerger {
-    struct Cursor {
-        explicit Cursor(ClientContext &context, ColumnDataCollection &collection_p)
-            : collection(collection_p), keys(LogicalType::BLOB) {
-            collection.InitializeScan(scan);
-            chunk.Initialize(context, collection.Types());
-        }
-        ColumnDataCollection &collection;
-        ColumnDataScanState scan;
-        DataChunk chunk;
-        Vector keys;
-        idx_t position = 0;
-    };
-
-public:
-    PartitionRunMerger(ClientContext &context_p,
-                       const PartialSortBindData &data_p,
-                       const vector<unique_ptr<ColumnDataCollection>> &runs,
-                       idx_t begin,
-                       idx_t end)
-        : context(context_p), data(data_p), heap([this](idx_t a, idx_t b) { return Less(b, a); }) {
-        for (idx_t i = begin; i < end; ++i) {
-            cursors.push_back(make_uniq<Cursor>(context, *runs[i]));
-            if (Advance(cursors.size() - 1)) {
-                heap.push(cursors.size() - 1);
-            }
-        }
-    }
-
-    void Scan(DataChunk &output) {
-        context.InterruptCheck();
-        SelectionVector selection(STANDARD_VECTOR_SIZE);
-        while (!heap.empty() && output.size() < STANDARD_VECTOR_SIZE) {
-            auto index = heap.top();
-            heap.pop();
-            auto &cursor = *cursors[index];
-            idx_t count = 0;
-            do {
-                selection.set_index(count++, cursor.position++);
-            } while (cursor.position < cursor.chunk.size() && output.size() + count < STANDARD_VECTOR_SIZE &&
-                     (heap.empty() || Less(index, heap.top())));
-            output.Append(cursor.chunk, selection, count);
-            if (cursor.position < cursor.chunk.size() || Advance(index)) {
-                heap.push(index);
-            }
-        }
-    }
-
-private:
-    bool Advance(idx_t index) {
-        auto &cursor = *cursors[index];
-        cursor.chunk.Reset();
-        if (!cursor.collection.Scan(cursor.scan, cursor.chunk) || !cursor.chunk.size()) {
-            return false;
-        }
-        cursor.position = 0;
-        MakeSortKeys(data, cursor.chunk, cursor.keys);
-        return true;
-    }
-
-    bool Less(idx_t a, idx_t b) const {
-        auto &left = *cursors[a];
-        auto &right = *cursors[b];
-        auto l = left.keys.Values<string_t>()[left.position].GetValue();
-        auto r = right.keys.Values<string_t>()[right.position].GetValue();
-        auto comparison = memcmp(l.GetData(), r.GetData(), MinValue<idx_t>(l.GetSize(), r.GetSize()));
-        if (comparison != 0) {
-            return comparison < 0;
-        }
-        return l.GetSize() != r.GetSize() ? l.GetSize() < r.GetSize() : a < b;
-    }
-
-    ClientContext &context;
-    const PartialSortBindData &data;
-    vector<unique_ptr<Cursor>> cursors;
-    std::priority_queue<idx_t, std::vector<idx_t>, std::function<bool(idx_t, idx_t)>> heap;
-};
-
-class PartitionedSortState : public GlobalTableFunctionState {
-    struct RemoteTask {
-        explicit RemoteTask(idx_t index_p) : index(index_p) {
-        }
-        idx_t index;
-        std::thread worker;
-        Handle<ArrowSchema> schema;
-        bool done = false;
-        std::deque<unique_ptr<ArrowArrayWrapper>> queue;
-        unique_ptr<ArrowCursor> cursor;
-        unique_ptr<ColumnDataAppendState> append;
-    };
-
-public:
-    PartitionedSortState(ClientContext &context_p, const PartialSortBindData &data_p)
-        : context(context_p), data(data_p), thread_context(context) {
-    }
-
-    ~PartitionedSortState() override {
-        Stop();
-    }
-
-    void Stop() {
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            stopped = true;
-        }
-        cv.notify_all();
-        for (auto &slot : slots) {
-            if (slot && slot->worker.joinable()) {
-                slot->worker.join();
-            }
-        }
-    }
-
-    void Check() {
-        context.InterruptCheck();
-        std::lock_guard<std::mutex> lock(mutex);
-        if (!worker_error.empty()) {
-            throw IOException("ADBC partitioned sort %s", worker_error);
-        }
-    }
-
-    void GeneratePartitions() {
-        auto start = std::chrono::steady_clock::now();
-        auto key = QuoteIdentifier(data.partition_key);
-        auto bounds =
-            ReadRows(context,
-                     data.uri,
-                     "SELECT min(" + key + "), max(" + key + "), count(" + key + "), count(*) FROM " + data.Source());
-        if (bounds.size() != 1) {
-            throw IOException("ADBC partitioned sort: invalid range bounds result");
-        }
-        bounds_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        if (bounds[0][3].GetValue<uint64_t>() == 0) {
-            return;
-        }
-        if (bounds[0][2].GetValue<uint64_t>() == 0) {
-            predicates.push_back("");
-        } else {
-            auto minimum = bounds[0][0].GetValue<hugeint_t>();
-            auto width = bounds[0][1].GetValue<hugeint_t>() - minimum + hugeint_t(1);
-            auto count = data.partition_count;
-            if (width < hugeint_t(count)) {
-                count = NumericCast<idx_t>(Hugeint::Cast<uint64_t>(width));
-            }
-            for (idx_t i = 0; i < count; ++i) {
-                string predicate;
-                if (i > 0) {
-                    predicate = key + " >= " + (minimum + width * hugeint_t(i) / hugeint_t(count)).ToString();
-                }
-                if (i + 1 < count) {
-                    if (!predicate.empty()) {
-                        predicate += " AND ";
-                    }
-                    predicate += key + " < " + (minimum + width * hugeint_t(i + 1) / hugeint_t(count)).ToString();
-                }
-                if (i == 0 && !predicate.empty()) {
-                    predicate = "(" + predicate + ") OR " + key + " IS NULL";
-                }
-                predicates.push_back(std::move(predicate));
-            }
-        }
-        remote_partitions = NumericCast<idx_t>(
-            Hugeint::Cast<uint64_t>(hugeint_t(predicates.size()) * hugeint_t(data.ratio) / hugeint_t(RATIO_SCALE)));
-        local_partitions = predicates.size() - remote_partitions;
-        next_remote = local_partitions;
-        for (idx_t i = 0; i < predicates.size(); ++i) {
-            runs.push_back(make_uniq<ColumnDataCollection>(context, data.types));
-        }
-    }
-
-    string Query(idx_t index, bool remote) const {
-        return data.Select() + (predicates[index].empty() ? "" : " WHERE " + predicates[index]) +
-               (remote ? data.Order() : "");
-    }
-
-    void ReadRemote(RemoteTask &task, unique_ptr<AdbcQuery> query) {
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            ++active_remote;
-            peak_active_remote = MaxValue(peak_active_remote, active_remote);
-        }
-        try {
-            query->Execute(Query(task.index, true));
-            auto schema = query->GetSchema();
-            {
-                std::lock_guard<std::mutex> lock(mutex);
-                task.schema = std::move(schema);
-            }
-            for (;;) {
-                {
-                    std::unique_lock<std::mutex> lock(mutex);
-                    cv.wait(lock, [&]() { return stopped || !worker_error.empty() || task.queue.size() < 2; });
-                    if (stopped || !worker_error.empty()) {
-                        break;
-                    }
-                }
-                auto batch = query->Next();
-                if (!batch->arrow_array.release) {
-                    break;
-                }
-                if (!batch->arrow_array.length) {
-                    continue;
-                }
-                {
-                    std::lock_guard<std::mutex> lock(mutex);
-                    if (stopped || !worker_error.empty()) {
-                        break;
-                    }
-                    task.queue.push_back(std::move(batch));
-                    queue_high_water = MaxValue<idx_t>(queue_high_water, task.queue.size());
-                }
-                cv.notify_all();
-            }
-        } catch (const std::exception &error) {
-            SetWorkerError(task.index, error.what());
-        } catch (...) {
-            SetWorkerError(task.index, "unknown driver error");
-        }
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            --active_remote;
-            task.done = true;
-        }
-        cv.notify_all();
-    }
-
-    void SetWorkerError(idx_t index, const string &message) {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (worker_error.empty()) {
-            worker_error = "remote partition " + std::to_string(index) + ": " + message;
-        }
-        cv.notify_all();
-    }
-
-    void StartNext(idx_t slot, unique_ptr<AdbcQuery> query = nullptr) {
-        Check();
-        if (next_remote == predicates.size()) {
-            return;
-        }
-        // Connection initialization stays on the DuckDB thread. Each task owns
-        // a new connection; no completed or cancelled driver's session is reused.
-        if (!query) {
-            query = make_uniq<AdbcQuery>(data.uri);
-        }
-        slots[slot] = make_uniq<RemoteTask>(next_remote++);
-        auto &task = *slots[slot];
-        task.worker =
-            std::thread([this, &task, query = std::move(query)]() mutable { ReadRemote(task, std::move(query)); });
-    }
-
-    bool DrainRemote() {
-        Check();
-        bool progress = false;
-        for (idx_t i = 0; i < slots.size(); ++i) {
-            auto &slot = slots[i];
-            if (!slot) {
-                continue;
-            }
-            unique_ptr<ArrowArrayWrapper> batch;
-            {
-                std::lock_guard<std::mutex> lock(mutex);
-                if (!slot->queue.empty()) {
-                    batch = std::move(slot->queue.front());
-                    slot->queue.pop_front();
-                }
-            }
-            if (batch) {
-                cv.notify_all();
-                progress = true;
-                try {
-                    if (!slot->cursor) {
-                        slot->cursor = make_uniq<ArrowCursor>(context, std::move(slot->schema));
-                        slot->cursor->Validate(data.names, data.types);
-                        slot->append = make_uniq<ColumnDataAppendState>();
-                        runs[slot->index]->InitializeAppend(*slot->append);
-                    }
-                    idx_t remaining = batch->arrow_array.length;
-                    DataChunk chunk;
-                    chunk.Initialize(context, data.types);
-                    while (remaining) {
-                        slot->cursor->Next(chunk, [&]() { return std::move(batch); });
-                        remaining -= chunk.size();
-                        remote_rows += chunk.size();
-                        runs[slot->index]->Append(*slot->append, chunk);
-                    }
-                } catch (const std::exception &error) {
-                    throw IOException("ADBC partitioned sort remote partition %llu: %s", slot->index, error.what());
-                }
-            }
-            bool done;
-            {
-                std::lock_guard<std::mutex> lock(mutex);
-                done = slot->done && slot->queue.empty();
-            }
-            if (done) {
-                slot->worker.join();
-                slot.reset();
-                StartNext(i);
-                progress = true;
-            }
-        }
-        Check();
-        return progress;
-    }
-
-    void SortLocal(idx_t index) {
-        try {
-            AdbcQuery query(data.uri);
-            query.Execute(Query(index, false));
-            ArrowCursor cursor(context, query.GetSchema());
-            DataChunk chunk;
-            chunk.Initialize(context, cursor.table.GetTypes());
-            if (!cursor.Next(chunk, [&]() { return query.Next(); })) {
-                return;
-            }
-            cursor.Validate(data.names, data.types);
-            auto sort = CreateLocalSort(context, data);
-            auto global_sink = sort->GetGlobalSinkState(context);
-            ExecutionContext execution(context, thread_context, nullptr);
-            auto local_sink = sort->GetLocalSinkState(execution);
-            OperatorSinkInput sink{*global_sink, *local_sink, interrupt};
-            do {
-                DrainRemote();
-                local_rows += chunk.size();
-                sort->Sink(execution, chunk, sink);
-            } while (cursor.Next(chunk, [&]() { return query.Next(); }));
-            OperatorSinkCombineInput combine{*global_sink, *local_sink, interrupt};
-            sort->Combine(execution, combine);
-            OperatorSinkFinalizeInput finalize{*global_sink, interrupt};
-            sort->Finalize(context, finalize);
-            auto global_source = sort->GetGlobalSourceState(context, *global_sink);
-            auto local_source = sort->GetLocalSourceState(execution, *global_source);
-            OperatorSourceInput source{*global_source, *local_source, interrupt};
-            ColumnDataAppendState append;
-            runs[index]->InitializeAppend(append);
-            bool finished;
-            do {
-                chunk.Reset();
-                finished = sort->GetData(execution, chunk, source) == SourceResultType::FINISHED;
-                if (chunk.size()) {
-                    runs[index]->Append(append, chunk);
-                }
-                DrainRemote();
-            } while (!finished);
-        } catch (const std::exception &error) {
-            throw IOException("ADBC partitioned sort local partition %llu: %s", index, error.what());
-        }
-    }
-
-    void Initialize() {
-        GeneratePartitions();
-        slots.resize(MinValue(remote_partitions, data.max_remote_concurrency));
-        vector<unique_ptr<AdbcQuery>> initial_queries;
-        for (idx_t i = 0; i < slots.size(); ++i) {
-            initial_queries.push_back(make_uniq<AdbcQuery>(data.uri));
-        }
-        for (idx_t i = 0; i < slots.size(); ++i) {
-            StartNext(i, std::move(initial_queries[i]));
-        }
-        for (idx_t i = 0; i < local_partitions; ++i) {
-            DrainRemote();
-            SortLocal(i);
-        }
-        for (;;) {
-            bool active = false;
-            for (auto &slot : slots) {
-                active = active || bool(slot);
-            }
-            if (!active) {
-                break;
-            }
-            if (!DrainRemote()) {
-                std::unique_lock<std::mutex> lock(mutex);
-                cv.wait_for(lock, std::chrono::milliseconds(20));
-            }
-        }
-        Check();
-        constexpr idx_t FAN_IN = 16;
-        while (runs.size() > FAN_IN) {
-            vector<unique_ptr<ColumnDataCollection>> merged;
-            for (idx_t begin = 0; begin < runs.size(); begin += FAN_IN) {
-                auto end = MinValue<idx_t>(begin + FAN_IN, runs.size());
-                auto result = make_uniq<ColumnDataCollection>(context, data.types);
-                {
-                    PartitionRunMerger merge(context, data, runs, begin, end);
-                    ColumnDataAppendState append;
-                    result->InitializeAppend(append);
-                    DataChunk chunk;
-                    chunk.Initialize(context, data.types);
-                    for (;;) {
-                        chunk.Reset();
-                        merge.Scan(chunk);
-                        if (!chunk.size()) {
-                            break;
-                        }
-                        result->Append(append, chunk);
-                    }
-                }
-                for (idx_t i = begin; i < end; ++i) {
-                    runs[i].reset();
-                }
-                merged.push_back(std::move(result));
-            }
-            runs = std::move(merged);
-            ++merge_passes;
-        }
-        merger = make_uniq<PartitionRunMerger>(context, data, runs, 0, runs.size());
-        initialized = true;
-    }
-
-    void Scan(DataChunk &output) {
-        if (!initialized) {
-            Initialize();
-        }
-        merger->Scan(output);
-    }
-
-    void Metrics(OperatorMetrics &metrics) {
-        std::lock_guard<std::mutex> lock(mutex);
-        metrics.rows_scanned = local_rows + remote_rows;
-        metrics.AddExtraInfo("Generated Partitions", std::to_string(predicates.size()));
-        metrics.AddExtraInfo("Local Partitions", std::to_string(local_partitions));
-        metrics.AddExtraInfo("Remote Partitions", std::to_string(remote_partitions));
-        metrics.AddExtraInfo("Local Rows", std::to_string(local_rows));
-        metrics.AddExtraInfo("Remote Rows", std::to_string(remote_rows));
-        metrics.AddExtraInfo("Peak Active Remote Queries", std::to_string(peak_active_remote));
-        metrics.AddExtraInfo("Queue High Watermark", std::to_string(queue_high_water));
-        metrics.AddExtraInfo("Bounds Seconds", std::to_string(bounds_seconds));
-        metrics.AddExtraInfo("Intermediate Merge Passes", std::to_string(merge_passes));
-    }
-
-private:
-    ClientContext &context;
-    const PartialSortBindData &data;
-    ThreadContext thread_context;
-    InterruptState interrupt;
-    vector<string> predicates;
-    vector<unique_ptr<ColumnDataCollection>> runs;
-    vector<unique_ptr<RemoteTask>> slots;
-    idx_t local_partitions = 0;
-    idx_t remote_partitions = 0;
-    idx_t next_remote = 0;
-    idx_t local_rows = 0;
-    idx_t remote_rows = 0;
-    idx_t active_remote = 0;
-    idx_t peak_active_remote = 0;
-    idx_t queue_high_water = 0;
-    idx_t merge_passes = 0;
-    double bounds_seconds = 0;
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool stopped = false;
-    bool initialized = false;
-    string worker_error;
-    unique_ptr<PartitionRunMerger> merger;
-};
-
-unique_ptr<GlobalTableFunctionState> InitPartitionedSort(ClientContext &context, TableFunctionInitInput &input) {
-    return make_uniq<PartitionedSortState>(context, input.bind_data->Cast<PartialSortBindData>());
-}
-
-void ScanPartitionedSort(ClientContext &context, TableFunctionInput &input, DataChunk &output) {
-    auto &state = input.global_state->Cast<PartitionedSortState>();
-    try {
-        state.Scan(output);
-    } catch (...) {
-        state.Stop();
-        throw;
-    }
-}
-
-void PartitionedSortMetrics(TableFunctionGetMetricsInput &input) {
-    if (input.global_state) {
-        input.global_state->Cast<PartitionedSortState>().Metrics(input.operator_metrics);
-    }
-}
-
 } // namespace
 
 void RegisterAdbcPartialSort(ExtensionLoader &loader) {
-    {
-        TableFunction function("read_adbc_partial_sort",
-                               {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                               ScanPartialSort,
-                               BindPartialSort,
-                               InitPartialSort);
-        function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
-            options.Add("partition_key", LogicalType::VARCHAR)
-                .Add("sort_columns", LogicalType::LIST(LogicalType::VARCHAR))
-                .Add("descending", LogicalType::LIST(LogicalType::BOOLEAN))
-                .Add("nulls_first", LogicalType::LIST(LogicalType::BOOLEAN))
-                .Add("pushdown_ratio", LogicalType::DECIMAL(10, 9));
-        });
-        function.projection_pushdown = false;
-        function.filter_pushdown = false;
-        function.order_preservation_type = OrderPreservationType::FIXED_ORDER;
-        function.parallelism = TableFunctionParallelism::FORCE_SINGLE_THREADED;
-        function.get_metrics = PartialSortMetrics;
-        CreateTableFunctionInfo info(function);
-        FunctionDescription description;
-        description.parameter_names = {"adbc_connection_profile_uri", "schema_or_database", "table"};
-        description.description = "Sorts an unchanged SQL table using concurrent ADBC key-range reads, a local "
-                                  "sort, and an ordered merge. The pushdown ratio measures key-range width, not rows.";
-        description.categories = {"adbc"};
-        info.descriptions.push_back(std::move(description));
-        loader.RegisterFunction(std::move(info));
-    }
-    {
-        TableFunction function("read_adbc_partitioned_sort",
-                               {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                               ScanPartitionedSort,
-                               BindPartitionedSort,
-                               InitPartitionedSort);
-        function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
-            options.Add("partition_key", LogicalType::VARCHAR)
-                .Add("sort_columns", LogicalType::LIST(LogicalType::VARCHAR))
-                .Add("descending", LogicalType::LIST(LogicalType::BOOLEAN))
-                .Add("nulls_first", LogicalType::LIST(LogicalType::BOOLEAN))
-                .Add("pushdown_ratio", LogicalType::DECIMAL(10, 9))
-                .Add("partition_count", LogicalType::BIGINT)
-                .Add("max_remote_concurrency", LogicalType::BIGINT);
-        });
-        function.projection_pushdown = false;
-        function.filter_pushdown = false;
-        function.order_preservation_type = OrderPreservationType::FIXED_ORDER;
-        function.parallelism = TableFunctionParallelism::FORCE_SINGLE_THREADED;
-        function.get_metrics = PartitionedSortMetrics;
-        CreateTableFunctionInfo info(function);
-        FunctionDescription description;
-        description.parameter_names = {"adbc_connection_profile_uri", "schema_or_database", "table"};
-        description.description =
-            "Automatically partitions an unchanged SQL table into integer key ranges, sorts selected ranges "
-            "remotely with bounded concurrency, and merges spillable sorted runs. The pushdown ratio "
-            "measures the fraction of generated partitions, not rows.";
-        description.categories = {"adbc"};
-        info.descriptions.push_back(std::move(description));
-        loader.RegisterFunction(std::move(info));
-    }
+    TableFunction function("read_adbc_partial_sort",
+                           {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                           ScanPartialSort,
+                           BindPartialSort,
+                           InitPartialSort);
+    function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+        options.Add("partition_key", LogicalType::VARCHAR)
+            .Add("sort_columns", LogicalType::LIST(LogicalType::VARCHAR))
+            .Add("descending", LogicalType::LIST(LogicalType::BOOLEAN))
+            .Add("nulls_first", LogicalType::LIST(LogicalType::BOOLEAN))
+            .Add("pushdown_ratio", LogicalType::DECIMAL(10, 9));
+    });
+    function.projection_pushdown = true;
+    function.filter_pushdown = false;
+    function.order_preservation_type = OrderPreservationType::FIXED_ORDER;
+    function.parallelism = TableFunctionParallelism::FORCE_SINGLE_THREADED;
+    function.get_metrics = PartialSortMetrics;
+    CreateTableFunctionInfo info(function);
+    FunctionDescription description;
+    description.parameter_names = {"adbc_connection_profile_uri", "schema_or_database", "table"};
+    description.description = "Sorts an unchanged SQL table using concurrent ADBC key-range reads, a local "
+                              "sort, and an ordered merge. The pushdown ratio measures key-range width, not rows.";
+    description.categories = {"adbc"};
+    info.descriptions.push_back(std::move(description));
+    loader.RegisterFunction(std::move(info));
 }
 
 } // namespace adbc

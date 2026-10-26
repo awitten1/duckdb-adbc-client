@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare full ClickHouse/DuckDB sorts and both partial-sort functions over ADBC."""
+"""Compare full ClickHouse/DuckDB sorts and partial-sort pushdown over ADBC."""
 
 import argparse
 import csv
@@ -23,7 +23,7 @@ from test_clickhouse_partial_sort import (
     system_metric,
 )
 
-VARIANTS = ("clickhouse", "duckdb", "partial", "partitioned")
+VARIANTS = ("clickhouse", "duckdb", "partial")
 RATIO_PRECISION = Decimal("0.000000001")
 
 
@@ -68,9 +68,9 @@ def arguments():
     )
     parser.add_argument(
         "--mode",
-        choices=("all", "both") + VARIANTS,
+        choices=("all",) + VARIANTS,
         default="all",
-        help="all: four variants; both: just the two table functions (legacy mode)",
+        help="all: full ClickHouse, full DuckDB, and partial-sort pushdown",
     )
     parser.add_argument(
         "--distributions",
@@ -89,8 +89,6 @@ def arguments():
     parser.add_argument(
         "--timeout", type=float, default=1800, help="Seconds per benchmark trial"
     )
-    parser.add_argument("--partition-count", type=int, default=20)
-    parser.add_argument("--max-remote-concurrency", type=int, default=4)
     parser.add_argument(
         "--output", type=Path, default=Path("build/partial-sort-benchmark.json")
     )
@@ -107,14 +105,8 @@ def arguments():
         parser.error(
             "--rows must be at least 2, --repeats positive, and --warmups/--payload-bytes nonnegative"
         )
-    if (
-        min(args.threads, args.partition_count, args.max_remote_concurrency) < 1
-        or args.timeout <= 0
-        or not math.isfinite(args.timeout)
-    ):
-        parser.error(
-            "--threads, --partition-count, --max-remote-concurrency, and --timeout must be positive"
-        )
+    if args.threads < 1 or args.timeout <= 0 or not math.isfinite(args.timeout):
+        parser.error("--threads and --timeout must be positive")
     args.ratios = list(dict.fromkeys(args.ratios))
     args.distributions = list(dict.fromkeys(args.distributions))
     args.orderings = list(dict.fromkeys(args.orderings))
@@ -124,7 +116,7 @@ def arguments():
     return args
 
 
-def case_query(h, table, keys, variant, ratio, args):
+def case_query(h, table, keys, variant, ratio):
     order = ", ".join(f"{identifier(key)} ASC NULLS LAST" for key in keys)
     if variant == "clickhouse":
         return "SELECT * FROM " + h.read(
@@ -137,15 +129,7 @@ def case_query(h, table, keys, variant, ratio, args):
             + " ORDER BY "
             + order
         )
-    h.partitioned = variant == "partitioned"
-    function = h.function(
-        table,
-        ratio,
-        keys,
-        partition_count=args.partition_count if h.partitioned else None,
-        max_remote_concurrency=args.max_remote_concurrency if h.partitioned else None,
-    )
-    return "SELECT * FROM " + function
+    return "SELECT * FROM " + h.function(table, ratio, keys)
 
 
 def copied_rows(output):
@@ -318,11 +302,7 @@ def main():
     args = arguments()
     if args.profiles_dir:
         args.profiles_dir.mkdir(parents=True, exist_ok=True)
-    variants = (
-        VARIANTS
-        if args.mode == "all"
-        else (("partial", "partitioned") if args.mode == "both" else (args.mode,))
-    )
+    variants = VARIANTS if args.mode == "all" else (args.mode,)
     randomizer = random.Random(args.seed)
     with tempfile.TemporaryDirectory() as temporary:
         profile_uri = args.profile
@@ -352,14 +332,11 @@ def main():
             "orderings": args.orderings,
             "ratio_semantics": {
                 "partial": "Fraction of integer key-range width assigned to remote sorting",
-                "partitioned": "Fraction of generated partitions assigned to remote sorting, rounded down",
                 "baselines": "No ratio; all sorting in the selected engine",
             },
             "repeats": args.repeats,
             "warmups_per_case": args.warmups,
             "seed": args.seed,
-            "partition_count": args.partition_count,
-            "max_remote_concurrency": args.max_remote_concurrency,
             "measurement": "End-to-end wall time in fresh DuckDB processes; all rows transferred over ADBC and consumed by CSV COPY to the null device. Baselines run once per repeat/workload, independent of ratios. Memory/spill metrics cover DuckDB, not ClickHouse or all driver allocations.",
             "duckdb": h.rows("SELECT version() AS version"),
             "clickhouse": h.rows(
@@ -408,16 +385,10 @@ def main():
                             "variant": variant,
                             "mode": variant,
                             "ratio": ratio,
-                            "sql": case_query(
-                                h, distribution, keys, variant, ratio, args
-                            ),
+                            "sql": case_query(h, distribution, keys, variant, ratio),
                         }
                         for variant in variants
-                        for ratio in (
-                            args.ratios
-                            if variant in ("partial", "partitioned")
-                            else [None]
-                        )
+                        for ratio in (args.ratios if variant == "partial" else [None])
                     ]
                     for warmup, rounds in ((True, args.warmups), (False, args.repeats)):
                         for repeat in range(rounds):
