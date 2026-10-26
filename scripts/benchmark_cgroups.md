@@ -13,10 +13,16 @@ two groups' CPUs exclusive; the remaining 8 logical CPUs serve the host.
 ClickHouse uses NUMA node 0 and DuckDB uses node 1. Memory is capped, not
 preallocated.
 
-| Group | Logical CPUs | NUMA node | Memory limit |
-|---|---|---|---|
-| `/sys/fs/cgroup/clickhouse` | `0-7,20-27` | 0 | 64 GiB |
-| `/sys/fs/cgroup/duckdb` | `10-17,30-37` | 1 | 64 GiB |
+The script enables the CPU controller and sets `cpu.max` to `1600000 100000`
+for each group: 1,600,000 microseconds of aggregate CPU runtime per 100,000
+microsecond period, equivalent to 16 CPUs. The cpuset selects which CPUs may
+run the workload; the quota limits aggregate CPU time. See the
+[kernel CPU controller documentation](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#cpu).
+
+| Group | Logical CPUs | CPU quota | NUMA node | Memory limit |
+|---|---|---|---|---|
+| `/sys/fs/cgroup/clickhouse` | `0-7,20-27` | 16 CPUs | 0 | 64 GiB |
+| `/sys/fs/cgroup/duckdb` | `10-17,30-37` | 16 CPUs | 1 | 64 GiB |
 
 Launch ClickHouse from the repository root:
 
