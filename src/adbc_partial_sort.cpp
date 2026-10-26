@@ -174,6 +174,7 @@ struct PartialSortBindData : public TableFunctionData {
     vector<idx_t> sort_columns;
     vector<OrderModifiers> modifiers;
     int64_t ratio;
+    double bind_seconds = 0;
 
     string Source() const {
         return (database.empty() ? "" : QuoteIdentifier(database) + ".") + QuoteIdentifier(table);
@@ -295,6 +296,7 @@ unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
                                          TableFunctionBindInput &input,
                                          vector<LogicalType> &types,
                                          vector<Identifier> &names) {
+    auto bind_started = std::chrono::steady_clock::now();
     if (!Settings::Get<EnableExternalAccessSetting>(context)) {
         throw PermissionException("ADBC partial sort requires external access");
     }
@@ -322,10 +324,10 @@ unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
     auto descending = ReadFlags(input, "descending", columns.size());
     auto nulls_first = ReadFlags(input, "nulls_first", columns.size());
 
-    AdbcQuery query(data->uri);
-    // Some drivers infer Arrow types from result rows rather than declared SQL types.
-    query.Execute("SELECT * FROM " + data->Source() + " LIMIT 1");
     {
+        AdbcQuery query(data->uri);
+        // Some drivers infer Arrow types from result rows rather than declared SQL types.
+        query.Execute("SELECT * FROM " + data->Source() + " LIMIT 1");
         ArrowCursor cursor(context, query.GetSchema());
         data->types = cursor.table.GetTypes();
         data->names = cursor.table.GetNames();
@@ -348,6 +350,7 @@ unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
     }
     types = data->types;
     names = StringsToIdentifiers(data->names);
+    data->bind_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - bind_started).count();
     return std::move(data);
 }
 
@@ -471,12 +474,16 @@ private:
     unique_ptr<LocalSinkState> local_sink;
 };
 
+// Owns one execution's local sort, remote producer, and ordered merge.
+// The scan thread sorts local input and merges both branches; the producer queues remote Arrow batches.
+// Merge positions persist across scan calls, and teardown stops and joins the producer.
 class PartialSortState : public GlobalTableFunctionState {
 public:
     using Clock = std::chrono::steady_clock;
     PartialSortState(ClientContext &context_p, const PartialSortBindData &data_p, const vector<column_t> &columns)
         : context(context_p), data(data_p, columns), thread_context(context), local_keys(LogicalType::BLOB),
-          remote_keys(LogicalType::BLOB) {
+          remote_keys(LogicalType::BLOB),
+          thread_count(MaxValue<idx_t>(1, TaskScheduler::GetScheduler(context).NumberOfThreads())) {
         merged_chunk.Initialize(context, data.types);
         local_chunk.Initialize(context, data.types);
         remote_chunk.Initialize(context, data.types);
@@ -579,7 +586,6 @@ public:
     }
 
     void SortLocalQuery(AdbcQuery &query) {
-        auto thread_count = MaxValue<idx_t>(1, TaskScheduler::GetScheduler(context).NumberOfThreads());
         if (thread_count == 1) {
             LocalSortWorker local(context, *sort, *sort_sink, query.GetSchema(), data);
             for (;;) {
@@ -833,6 +839,7 @@ public:
         metrics.rows_scanned = local_rows + remote_rows;
         metrics.AddExtraInfo("Local Rows", std::to_string(local_rows));
         metrics.AddExtraInfo("Remote Rows", std::to_string(remote_rows));
+        metrics.AddExtraInfo("Thread Count", std::to_string(thread_count));
         metrics.AddExtraInfo("Local Sort Workers", std::to_string(local_sort_workers));
         metrics.AddExtraInfo("Peak Active Local Sort Tasks", std::to_string(local_sort_concurrency.peak));
         metrics.AddExtraInfo("Queue High Watermark", std::to_string(queue_high_water));
@@ -850,42 +857,85 @@ public:
     }
 
 private:
+    // Query settings, memory management, and cancellation checks.
     ClientContext &context;
+    // Requested columns, hidden sort keys, SQL generation, and output mapping.
     ProjectedSortData data;
+    // Scan thread's context for DuckDB sort calls; sort workers have their own.
     ThreadContext thread_context;
+    // Interrupt state passed to the scan thread's sort operations.
     InterruptState interrupt;
+
+    // DuckDB sort for the local branch; absent for ratio 1.
     unique_ptr<Sort> sort;
+    // Shared sink state receiving local workers' sorted runs.
     unique_ptr<GlobalSinkState> sort_sink;
+    // Global state for reading the completed local sort.
     unique_ptr<GlobalSourceState> sort_source;
+    // Scan thread's cursor into the local sort output.
     unique_ptr<LocalSourceState> sort_local_source;
+    // Converts queued remote batches on the scan thread.
     unique_ptr<ArrowCursor> remote_cursor;
+
+    // Merged rows, including hidden keys, before applying the output projection.
     DataChunk merged_chunk;
+    // Current sorted local chunk, retained until its rows have been merged.
     DataChunk local_chunk;
+    // Current converted remote chunk, retained until its rows have been merged.
     DataChunk remote_chunk;
+    // Encoded ordering keys for local_chunk, used by LocalFirst().
     Vector local_keys;
+    // Encoded ordering keys for remote_chunk, using the same ordering modifiers.
     Vector remote_keys;
+    // Scheduler thread count captured for this execution's local sort budget.
+    const idx_t thread_count;
+    // Next unconsumed row in local_chunk.
     idx_t local_pos = 0;
+    // Next unconsumed row in remote_chunk.
     idx_t remote_pos = 0;
+    // Both branch inputs have been prepared by Initialize().
     bool initialized = false;
+    // Local sort signaled FINISHED; local_chunk may still contain unread rows.
     bool local_done = false;
+
+    // Rows read from the local ADBC query.
     idx_t local_rows = 0;
+    // Maximum number of worker-local sort states used.
     idx_t local_sort_workers = 0;
+    // Tracks active/peak local tasks under its own mutex.
     LocalSortConcurrency local_sort_concurrency;
+    // Rows queued by the producer, including any not emitted.
     idx_t remote_rows = 0;
+    // Largest number of queued remote batches observed.
     idx_t queue_high_water = 0;
+    // Elapsed time for the partition bounds query.
     double bounds_seconds = 0;
+    // Local sort setup begins, after opening its connection.
     Clock::time_point local_started;
+    // Local input consumed and sort sink finalized.
     Clock::time_point local_finished;
+    // Producer starts executing the remote query.
     Clock::time_point remote_started;
+    // Producer finishes, stops, or encounters an error.
     Clock::time_point remote_finished;
+
+    // Protects the queue, remote schema/status/errors, and remote metrics.
     std::mutex queue_mutex;
+    // Signals schema/data/completion, available queue capacity, or stop.
     std::condition_variable queue_cv;
+    // At most two remote batches waiting for conversion.
     std::deque<unique_ptr<ArrowArrayWrapper>> queue;
+    // Published by the producer, then moved into remote_cursor.
     Handle<ArrowSchema> remote_schema;
+    // Producer has published the remote Arrow schema.
     bool schema_ready = false;
+    // Producer has exited, or this execution has no remote branch.
     bool remote_done = false;
+    // Requests producer shutdown and interrupts its queue-capacity wait.
     bool stopped = false;
+    // Producer exception message, rethrown on the scan thread.
     string worker_error;
+    // Remote query producer, joined by Stop() before state destruction.
     std::thread worker;
 };
 
@@ -904,6 +954,10 @@ void ScanPartialSort(ClientContext &context, TableFunctionInput &input, DataChun
 }
 
 void PartialSortMetrics(TableFunctionGetMetricsInput &input) {
+    if (input.bind_data) {
+        auto &data = input.bind_data->Cast<PartialSortBindData>();
+        input.operator_metrics.AddExtraInfo("Bind Seconds", std::to_string(data.bind_seconds));
+    }
     if (input.global_state) {
         input.global_state->Cast<PartialSortState>().Metrics(input.operator_metrics);
     }
