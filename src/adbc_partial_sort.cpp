@@ -261,9 +261,6 @@ Value Required(TableFunctionBindInput &input, const string &name) {
 idx_t ResolveColumn(const PartialSortBindData &data, const string &name) {
     for (idx_t i = 0; i < data.names.size(); ++i) {
         if (data.names[i] == name) {
-            if (!IntegerKey(data.types[i])) {
-                throw BinderException("ADBC partial sort key %s must be an integer of at most 64 bits", name);
-            }
             return i;
         }
     }
@@ -339,7 +336,11 @@ unique_ptr<FunctionData> BindPartialSort(ClientContext &context,
             }
         }
     }
-    ResolveColumn(*data, data->partition_key);
+    auto partition_column = ResolveColumn(*data, data->partition_key);
+    if (!IntegerKey(data->types[partition_column])) {
+        throw BinderException("ADBC partial sort partition key %s must be an integer of at most 64 bits",
+                              data->partition_key);
+    }
     for (idx_t i = 0; i < columns.size(); ++i) {
         if (columns[i].IsNull()) {
             throw BinderException("sort_columns cannot contain NULL");

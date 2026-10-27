@@ -204,6 +204,67 @@ class PartialSortTests(unittest.TestCase):
                             nulls_first=[True],
                         )
 
+    def test_comparable_sort_keys(self):
+        h = self.harness
+        h.create(
+            "sort_types",
+            "id UInt64, shipdate Nullable(Date), stamp Nullable(DateTime64(6, 'UTC')), "
+            "amount Nullable(Decimal(18,2)), label Nullable(String), "
+            "measure Nullable(Float64), flag Nullable(Bool), items Array(Int32)",
+        )
+        h.execute(
+            f"INSERT INTO {h.source('sort_types')} SELECT number, "
+            "if(number % 13 = 0, NULL, toDate('1992-01-01') + toIntervalDay(number % 97)), "
+            "if(number % 13 = 0, NULL, toDateTime64('1992-01-01 00:00:00', 6, 'UTC') "
+            "+ toIntervalMicrosecond(number * 7919 % 1000003)), "
+            "if(number % 13 = 0, NULL, toDecimal64(toInt64(number % 1009) - 500, 2) / 100), "
+            "if(number % 13 = 0, NULL, ['', 'a', 'aa', 'Z', 'é'][number % 5 + 1]), "
+            "if(number % 13 = 0, NULL, (toFloat64(number % 1009) - 500) / 7), "
+            "if(number % 13 = 0, NULL, number % 2 = 0), "
+            "[toInt32(number % 7), -toInt32(number % 11)] FROM numbers(257)"
+        )
+        for key in ("shipdate", "stamp", "amount", "label", "measure", "flag", "items"):
+            for ratio in ("0", "0.5", "1"):
+                for descending, nulls_first in ((False, False), (True, True)):
+                    with self.subTest(key=key, ratio=ratio, descending=descending):
+                        self.assert_matches(
+                            "sort_types",
+                            ratio=ratio,
+                            keys=(key, "id"),
+                            descending=[descending, False],
+                            nulls_first=[nulls_first, False],
+                        )
+
+        # Match the single DATE key reported by the user, with hidden keys and parallel local sorting.
+        h.create("shipdates", "id UInt64, shipdate Nullable(Date), payload String")
+        h.execute(
+            f"INSERT INTO {h.source('shipdates')} SELECT number, "
+            "if(number % 13 = 0, NULL, toDate('1992-01-01') + toIntervalDay(number * 17 % 101)), "
+            "toString(number) FROM numbers(12000)"
+        )
+        expected = h.rows(
+            f"SELECT shipdate FROM {h.read('SELECT * FROM ' + h.source('shipdates'))} "
+            "ORDER BY shipdate DESC NULLS FIRST"
+        )
+        for ratio in ("0", "0.5", "1"):
+            function = h.function(
+                "shipdates",
+                ratio,
+                keys=("shipdate",),
+                descending=[True],
+                nulls_first=[True],
+            )
+            self.assertEqual(
+                h.rows(f"SET threads=4; SELECT shipdate FROM {function}"), expected
+            )
+            function = h.function("shipdates", ratio, keys=("shipdate", "id"))
+            payloads = h.rows(f"SET threads=4; SELECT payload FROM {function}")
+            expected_payloads = h.rows(
+                f"SELECT payload FROM {h.read('SELECT * FROM ' + h.source('shipdates'))} "
+                "ORDER BY shipdate ASC NULLS LAST, id"
+            )
+            self.assertEqual(payloads, expected_payloads)
+
     def test_composition_and_reexecution(self):
         h = self.harness
         function = h.function("events")
@@ -434,7 +495,10 @@ class PartialSortTests(unittest.TestCase):
             (h.function("events", "NULL"), "requires pushdown_ratio"),
             (h.function("events", keys=()), "must not be empty"),
             (h.function("events", descending=[True]), "must match"),
-            (h.function("events", keys=("payload",)), "must be an integer"),
+            (
+                h.function("events", partition="payload"),
+                "partition key payload must be an integer",
+            ),
             (h.function("events", keys=("missing",)), "does not exist"),
         ]
         for function, message in cases:

@@ -26,6 +26,22 @@ NULL	4	null
 50	1	middle
 50	1	middle
 
+# Sort keys are not restricted to integers; payload is a TEXT column.
+query T
+SELECT payload FROM read_adbc_partial_sort('profile://{TEST_DIR}/partial_sort.toml', 'main', 'events', partition_key := 'id', sort_columns := ['payload'], pushdown_ratio := 0.5)
+----
+lower
+middle
+middle
+null
+upper
+
+# Range arithmetic still requires an integer partition key.
+statement error
+SELECT * FROM read_adbc_partial_sort('profile://{TEST_DIR}/partial_sort.toml', 'main', 'events', partition_key := 'payload', sort_columns := ['id'], pushdown_ratio := 0.5)
+----
+partition key payload must be an integer of at most 64 bits
+
 # An empty namespace emits an unqualified table name. All rows sorted locally.
 query IIT
 SELECT * FROM read_adbc_partial_sort('profile://{TEST_DIR}/partial_sort.toml', '', 'events', partition_key := 'id', sort_columns := ['score', 'id'], descending := [true, false], pushdown_ratio := 0)
