@@ -1,59 +1,96 @@
 # Benchmark resource groups
 
-Create the cgroup v2 groups after each reboot:
+Install the systemd units from the repository root as your login user:
 
 ```bash
 sudo bash scripts/setup_benchmark_cgroups.sh
+sudo systemctl restart adbc-clickhouse.service
 ```
 
-This script is specific to this machine's CPU topology. Each group gets 16
-logical CPUs (8 physical cores, including both SMT siblings), a hard 64 GiB
-memory limit (68,719,476,736 bytes), and no swap. CPU partition roots keep the
-two groups' CPUs exclusive; the remaining 8 logical CPUs serve the host.
-ClickHouse uses NUMA node 0 and DuckDB uses node 1. Memory is capped, not
-preallocated.
+The setup script installs two resource slices and enables the ClickHouse
+service at boot. It does not restart a running server; the second command
+applies the new service configuration. When called directly as root, pass the
+login user as the script's first argument. The Ubuntu bootstrap runs both
+commands automatically.
 
-The script enables the CPU controller and sets `cpu.max` to `1600000 100000`
-for each group: 1,600,000 microseconds of aggregate CPU runtime per 100,000
-microsecond period, equivalent to 16 CPUs. The cpuset selects which CPUs may
-run the workload; the quota limits aggregate CPU time. See the
-[kernel CPU controller documentation](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#cpu).
+Systemd creates the cgroups, enables their controllers, and places processes
+in them. The settings persist in `/etc/systemd/system/`; there is no manual
+PID migration or root-level `cgroup.subtree_control` setup.
 
-| Group | Logical CPUs | CPU quota | NUMA node | Memory limit |
+This configuration targets the 40-thread, two-socket machine. Each engine
+gets 16 logical CPUs (8 physical cores, including both SMT siblings), a hard
+64 GiB memory limit (68,719,476,736 bytes), and no swap. ClickHouse uses NUMA
+node 0 and DuckDB uses node 1. Memory is capped, not preallocated.
+
+| Systemd slice | Logical CPUs | CPU quota | NUMA node | Memory limit |
 |---|---|---|---|---|
-| `/sys/fs/cgroup/clickhouse` | `0-7,20-27` | 16 CPUs | 0 | 64 GiB |
-| `/sys/fs/cgroup/duckdb` | `10-17,30-37` | 16 CPUs | 1 | 64 GiB |
+| `adbc-clickhouse.slice` | `0-7,20-27` | 16 CPUs | 0 | 64 GiB |
+| `adbc-duckdb.slice` | `10-17,30-37` | 16 CPUs | 1 | 64 GiB |
 
-Launch ClickHouse from the repository root:
+`AllowedCPUs` selects the CPUs; `CPUQuota=1600%` with a 100 ms period sets
+`cpu.max` to `1600000 100000`. `AllowedMemoryNodes`, `MemoryMax`, and
+`MemorySwapMax` control NUMA placement, memory, and swap. These limits apply
+to all threads and child processes in each slice combined, including all
+concurrent DuckDB commands. See the
+[systemd resource-control documentation](https://www.freedesktop.org/software/systemd/man/255/systemd.resource-control.html).
+
+The engines have disjoint allowed CPU sets. These settings do not create
+exclusive CPU partitions: unrelated host processes can still use those CPUs.
+The remaining 8 logical CPUs are outside the two engine sets.
+
+ClickHouse runs as your login user through `adbc-clickhouse.service`, with
+its watchdog disabled so systemd tracks the server directly:
 
 ```bash
-(
-  sudo sh -c 'echo "$1" > /sys/fs/cgroup/clickhouse/cgroup.procs' sh "$BASHPID" &&
-  exec ./clickhouse/start-clickhouse.sh
-)
+sudo systemctl status adbc-clickhouse.service
+sudo journalctl -u adbc-clickhouse.service
 ```
 
-In another Bash terminal, launch the benchmark in DuckDB's group:
+Run DuckDB interactively in its slice:
 
 ```bash
-(
-  sudo sh -c 'echo "$1" > /sys/fs/cgroup/duckdb/cgroup.procs' sh "$BASHPID" &&
-  exec python3 scripts/benchmark_clickhouse_partial_sort.py \
+bash scripts/run_duckdb_cgroup.sh ./build/release/duckdb -unsigned
+```
+
+Then load the extension and set the application CPU and memory budgets,
+leaving room for Arrow/driver buffers below the slice's 64 GiB cap. The pinned
+DuckDB build still defaults to 40 threads and 125.8 GiB on this host even
+inside the slice, so set these explicitly:
+
+```sql
+LOAD 'build/release/extension/adbc/adbc.duckdb_extension';
+SET threads = 16;
+SET memory_limit = '56GiB';
+```
+
+Run the benchmark in the same slice:
+
+```bash
+bash scripts/run_duckdb_cgroup.sh python3 scripts/benchmark_clickhouse_partial_sort.py \
     --threads 16 --memory-limit 56GiB
-)
 ```
 
-The subshell joins the group before launching the program, so children inherit
-the limits and programs still run as your user. Set `ADBC_DRIVER_PATH` and put
-`dbc` on PATH as usual. The DuckDB memory setting leaves room below the cgroup
-limit for Arrow/driver buffers and other allocations. ClickHouse and DuckDB
-retain their application-level settings; the cgroup limits apply to all threads
-and child processes combined.
+The launcher creates a transient systemd scope inside `adbc-duckdb.slice`.
+It uses sudo to create the scope, then drops privileges before executing the
+command. It preserves the working directory, terminal, `HOME`, `PATH`, and
+`ADBC_DRIVER_PATH` when set. Set driver discovery as usual before launching.
+The command's exit status is returned to the shell. Starting DuckDB directly
+without the launcher leaves it in the SSH session's cgroup.
 
-To release the CPU partitions after stopping the workloads:
+Inspect the effective limits:
 
 ```bash
-sudo sh -c 'echo member > /sys/fs/cgroup/clickhouse/cpuset.cpus.partition'
-sudo sh -c 'echo member > /sys/fs/cgroup/duckdb/cpuset.cpus.partition'
-sudo rmdir /sys/fs/cgroup/clickhouse /sys/fs/cgroup/duckdb
+systemctl show adbc-clickhouse.slice adbc-duckdb.slice \
+    -p ControlGroup -p EffectiveCPUs -p EffectiveMemoryNodes \
+    -p CPUQuotaPerSecUSec -p MemoryMax -p MemorySwapMax
 ```
+
+The cgroup paths are `/sys/fs/cgroup/adbc.slice/adbc-clickhouse.slice` and
+`/sys/fs/cgroup/adbc.slice/adbc-duckdb.slice`. ClickHouse's service and
+DuckDB's transient scopes are children of their respective slices. Resource
+limits declared on a slice apply to all of those children.
+
+When migrating from the old setup, stop ClickHouse before installing the
+new units, then start it again. Remove the old `/sys/fs/cgroup/clickhouse`
+and `/sys/fs/cgroup/duckdb` directories only after their `cgroup.procs` files
+are empty. Do not write resource settings into those old groups.

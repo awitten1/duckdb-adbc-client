@@ -28,13 +28,15 @@ clones `https://github.com/awitten1/duckdb-adbc-client.git`, branch
 submodules, and builds DuckDB, ADBC, and TPC-H. The selected remote branch must
 contain `load_clickhouse_tpch.py` and the updated cgroup setup script.
 
-The script installs an enabled `adbc-clickhouse.service` that recreates the
-cgroups after reboot and starts ClickHouse in its CPU/memory group, running
-as your login user. ClickHouse's watchdog is disabled so systemd tracks the
-server directly. The service signals its main process on shutdown because
-the process joins the experiment's `/clickhouse` cgroup. Logs go to journald.
-The bootstrap then generates and loads TPC-H SF25 in DuckDB's cgroup. Data
-persists across reboot; loading runs during setup, not on each boot.
+The script installs an enabled `adbc-clickhouse.service` and two systemd
+resource slices. Systemd applies the CPU, NUMA, memory, and swap limits and
+starts ClickHouse as your login user after reboot. ClickHouse's watchdog is
+disabled so systemd tracks the server directly; logs go to journald. The
+bootstrap generates and loads TPC-H SF25 in DuckDB's slice. Data persists
+across reboot; loading runs during setup, not on each boot. The CPU sets are
+disjoint between engines but do not exclude other host processes; see
+[benchmark_cgroups.md](../scripts/benchmark_cgroups.md) for details and the
+`run_duckdb_cgroup.sh` launcher for interactive queries and benchmarks.
 
 `duckdb`, `dbc`, `clickhouse`, and `clickhouse-client` are available in subsequent
 Bash SSH sessions, and `profile://myclickhouse` connects to the local server.
