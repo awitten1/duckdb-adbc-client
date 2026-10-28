@@ -90,6 +90,11 @@ protocol on `127.0.0.1:9000`, using the default user with an empty password.
 The launcher defaults to UTC when `TZ` is unset.
 The default profile uses LZ4 transport compression for compatibility with the
 ClickHouse ADBC 0.1.1 driver.
+It also sets `http_send_timeout` to 3600 seconds to allow for pauses caused by
+spill I/O or scheduling. The partial-sort producer drains into a spillable
+buffer without waiting for the local sort or merge. Restart ClickHouse after
+changing this setting. A pause longer than the timeout can still abort the
+remote stream.
 
 In another terminal, connect with:
 

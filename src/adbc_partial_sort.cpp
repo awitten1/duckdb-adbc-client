@@ -2,6 +2,7 @@
 #include "adbc_util.hpp"
 
 #include "duckdb/common/sorting/sort.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -11,6 +12,7 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -24,6 +26,7 @@ namespace adbc {
 namespace {
 
 constexpr int64_t RATIO_SCALE = 1000000000;
+constexpr idx_t REMOTE_SEGMENT_BYTES = 1024 * 1024;
 
 string QuoteIdentifier(const string &name) {
     return "\"" + StringUtil::Replace(name, "\"", "\"\"") + "\"";
@@ -449,6 +452,26 @@ public:
             if (!cursor.Next(chunk, []() { return make_uniq<ArrowArrayWrapper>(); })) {
                 throw InternalException("ADBC local sort exhausted its batch");
             }
+            if (offset == begin) {
+                // Sample one chunk per input slice, rather than inspecting every payload value twice.
+                auto bytes = chunk.GetDataSize();
+                for (auto &column : chunk.data) {
+                    if (column.GetType().InternalType() != PhysicalType::VARCHAR) {
+                        continue;
+                    }
+                    // Arrow string bytes may be externally owned and absent from GetDataSize().
+                    UnifiedVectorFormat format;
+                    column.ToUnifiedFormat(format);
+                    auto strings = UnifiedVectorFormat::GetData<string_t>(format);
+                    for (idx_t i = 0; i < chunk.size(); ++i) {
+                        auto index = format.sel->get_index(i);
+                        if (format.validity.RowIsValid(index)) {
+                            bytes += strings[index].GetSize();
+                        }
+                    }
+                }
+                sampled_row_width = MaxValue(sampled_row_width, (bytes + chunk.size() - 1) / chunk.size());
+            }
             D_ASSERT(offset + chunk.size() <= end);
             offset += chunk.size();
             sort.Sink(execution, chunk, input);
@@ -464,6 +487,10 @@ public:
         sort.Combine(execution, input);
     }
 
+    idx_t SampledRowWidth() const {
+        return sampled_row_width;
+    }
+
 private:
     ClientContext &context;
     Sort &sort;
@@ -473,10 +500,11 @@ private:
     ArrowCursor cursor;
     DataChunk chunk;
     unique_ptr<LocalSinkState> local_sink;
+    idx_t sampled_row_width = 0;
 };
 
 // Owns one execution's local sort, remote producer, and ordered merge.
-// The scan thread sorts local input and merges both branches; the producer queues remote Arrow batches.
+// Local tasks build/merge sorted runs; the remote producer drains into buffer-managed segments.
 // Merge positions persist across scan calls, and teardown stops and joins the producer.
 class PartialSortState : public GlobalTableFunctionState {
 public:
@@ -513,6 +541,22 @@ public:
         }
     }
 
+    bool PublishRemote(unique_ptr<ColumnDataCollection> segment) {
+        auto bytes = segment->AllocationSize();
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            if (stopped) {
+                return false;
+            }
+            queue.push_back(std::move(segment));
+            remote_buffer_bytes += bytes;
+            remote_buffer_peak_bytes = MaxValue(remote_buffer_peak_bytes, remote_buffer_bytes);
+            remote_buffer_peak_segments = MaxValue<idx_t>(remote_buffer_peak_segments, queue.size());
+        }
+        queue_cv.notify_all();
+        return true;
+    }
+
     void ReadRemote(unique_ptr<AdbcQuery> query, const string &sql) {
         try {
             {
@@ -520,37 +564,43 @@ public:
                 remote_started = Clock::now();
             }
             query->Execute(sql);
-            {
-                std::lock_guard<std::mutex> lock(queue_mutex);
-                remote_schema = query->GetSchema();
-                schema_ready = true;
-            }
-            queue_cv.notify_all();
-            for (;;) {
-                {
-                    std::unique_lock<std::mutex> lock(queue_mutex);
-                    queue_cv.wait(lock, [&]() { return stopped || queue.size() < 2; });
-                    if (stopped) {
-                        break;
-                    }
-                }
-                auto batch = query->Next();
-                if (!batch->arrow_array.release) {
-                    break;
-                }
-                if (!batch->arrow_array.length) {
-                    continue;
-                }
+            ArrowCursor cursor(context, query->GetSchema());
+            cursor.Validate(data.names, data.types);
+            DataChunk chunk;
+            chunk.Initialize(context, data.types);
+            unique_ptr<ColumnDataCollection> segment;
+            ColumnDataAppendState append;
+            while (true) {
+                context.InterruptCheck();
                 {
                     std::lock_guard<std::mutex> lock(queue_mutex);
                     if (stopped) {
                         break;
                     }
-                    queue.push_back(std::move(batch));
-                    remote_rows += queue.back()->arrow_array.length;
-                    queue_high_water = MaxValue<idx_t>(queue_high_water, queue.size());
                 }
-                queue_cv.notify_all();
+                if (!cursor.Next(chunk, [&]() { return query->Next(); })) {
+                    break;
+                }
+                if (!segment) {
+                    segment = make_uniq<ColumnDataCollection>(context, data.types);
+                    segment->InitializeAppend(append);
+                }
+                segment->Append(append, chunk);
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex);
+                    remote_rows += chunk.size();
+                }
+                if (segment->AllocationSize() >= REMOTE_SEGMENT_BYTES) {
+                    // Release writer pins before publishing so queued blocks can spill immediately.
+                    append.current_chunk_state.handles.clear();
+                    if (!PublishRemote(std::move(segment))) {
+                        break;
+                    }
+                }
+            }
+            append.current_chunk_state.handles.clear();
+            if (segment) {
+                PublishRemote(std::move(segment));
             }
         } catch (const std::exception &error) {
             std::lock_guard<std::mutex> lock(queue_mutex);
@@ -567,23 +617,22 @@ public:
         queue_cv.notify_all();
     }
 
-    unique_ptr<ArrowArrayWrapper> Pop() {
+    unique_ptr<ColumnDataCollection> Pop() {
         std::unique_lock<std::mutex> lock(queue_mutex);
-        while (queue.empty() && !remote_done) {
+        while (queue.empty() && !remote_done && !stopped) {
             queue_cv.wait_for(lock, std::chrono::milliseconds(20));
             context.InterruptCheck();
         }
         if (!worker_error.empty()) {
             throw IOException("ADBC partial sort remote branch: %s", worker_error);
         }
-        if (queue.empty()) {
-            return make_uniq<ArrowArrayWrapper>();
+        if (stopped || queue.empty()) {
+            return nullptr;
         }
-        auto batch = std::move(queue.front());
+        auto segment = std::move(queue.front());
         queue.pop_front();
-        lock.unlock();
-        queue_cv.notify_all();
-        return batch;
+        remote_buffer_bytes -= segment->AllocationSize();
+        return segment;
     }
 
     void SortLocalQuery(AdbcQuery &query) {
@@ -604,6 +653,7 @@ public:
                 local.SinkBatch(shared_ptr<ArrowArrayWrapper>(batch.release()), 0, count);
             }
             local.Combine();
+            local_row_width = local.SampledRowWidth();
             local_sort_concurrency.peak = local_rows ? 1 : 0;
             return;
         }
@@ -686,6 +736,51 @@ public:
         }
         executor.WorkOnTasks();
         CheckWorker();
+        for (auto &local : locals) {
+            local_row_width = MaxValue(local_row_width, local->SampledRowWidth());
+        }
+    }
+
+    void PrepareLocalSource() {
+        ExecutionContext execution(context, thread_context, nullptr);
+        sort_source = sort->GetGlobalSourceState(context, *sort_sink);
+        auto &buffers = BufferManager::GetBufferManager(context);
+        // Concurrent sources pin whole merge partitions. Budget for keys/payload, writer buffers,
+        // and the remote reader; retain the streaming source when memory is tight.
+        auto partition_rows = MinValue<idx_t>(local_rows, DEFAULT_ROW_GROUP_SIZE);
+        auto worker_bytes =
+            MaxValue<idx_t>(8 * buffers.GetBlockAllocSize(), 4 * partition_rows * (local_row_width + 32));
+        auto memory_workers = MaxValue<idx_t>(1, buffers.GetOperatorMemoryLimit() / worker_bytes);
+        local_source_workers = MinValue(MinValue(thread_count, sort_source->MaxThreads()), memory_workers);
+        if (local_source_workers == 1) {
+            sort_local_source = sort->GetLocalSourceState(execution, *sort_source);
+            return;
+        }
+
+        auto started = Clock::now();
+        vector<unique_ptr<LocalSourceState>> locals;
+        // Register every source before scheduling: the last source to finish releases the sorted runs.
+        for (idx_t i = 0; i < local_source_workers; ++i) {
+            locals.push_back(sort->GetLocalSourceState(execution, *sort_source));
+        }
+        TaskExecutor executor(context);
+        for (auto &local : locals) {
+            executor.ScheduleTask(make_uniq<LocalSortTask>(executor, local_sort_concurrency, [this, &state = *local]() {
+                ThreadContext worker_context(context);
+                ExecutionContext worker_execution(context, worker_context, nullptr);
+                InterruptState worker_interrupt;
+                OperatorSourceInput input{*sort_source, state, worker_interrupt};
+                // DuckDB retains each partition's batch index when assembling the ordered column collection.
+                sort->MaterializeColumnData(worker_execution, input);
+            }));
+        }
+        executor.WorkOnTasks();
+        CheckWorker();
+        OperatorSourceInput input{*sort_source, *locals.front(), interrupt};
+        local_collection = sort->GetColumnData(input);
+        local_collection->InitializeScan(local_scan);
+        local_source_seconds = std::chrono::duration<double>(Clock::now() - started).count();
+        local_finished = Clock::now();
     }
 
     void Initialize() {
@@ -726,6 +821,7 @@ public:
         if (!remote_sql.empty()) {
             remote_query = make_uniq<AdbcQuery>(data.uri);
         }
+        merge_branches = local_query && remote_query;
         if (remote_query) {
             worker = std::thread([this, query = std::move(remote_query), remote_sql]() mutable {
                 ReadRemote(std::move(query), remote_sql);
@@ -737,27 +833,17 @@ public:
             local_started = Clock::now();
             sort = CreateLocalSort(context, data);
             sort_sink = sort->GetGlobalSinkState(context);
-            ExecutionContext execution(context, thread_context, nullptr);
             local_query->Execute(local_sql);
             SortLocalQuery(*local_query);
             CheckWorker();
             OperatorSinkFinalizeInput finalize{*sort_sink, interrupt};
             sort->Finalize(context, finalize);
-            local_finished = Clock::now();
-            sort_source = sort->GetGlobalSourceState(context, *sort_sink);
-            sort_local_source = sort->GetLocalSourceState(execution, *sort_source);
+            local_run_build_seconds = std::chrono::duration<double>(Clock::now() - local_started).count();
+            PrepareLocalSource();
         }
-        if (worker.joinable()) {
-            std::unique_lock<std::mutex> lock(queue_mutex);
-            while (!schema_ready && !remote_done) {
-                queue_cv.wait_for(lock, std::chrono::milliseconds(20));
-                context.InterruptCheck();
-            }
-            if (!worker_error.empty()) {
-                throw IOException("ADBC partial sort remote branch: %s", worker_error);
-            }
-            remote_cursor = make_uniq<ArrowCursor>(context, std::move(remote_schema));
-            remote_cursor->Validate(data.names, data.types);
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            remote_rows_before_merge = remote_rows;
         }
         initialized = true;
     }
@@ -774,14 +860,25 @@ public:
         if (!sort || local_done) {
             return false;
         }
-        ExecutionContext execution(context, thread_context, nullptr);
-        OperatorSourceInput input{*sort_source, *sort_local_source, interrupt};
-        local_done = sort->GetData(execution, local_chunk, input) == SourceResultType::FINISHED;
+        if (local_collection) {
+            local_done = !local_collection->Scan(local_scan, local_chunk);
+        } else {
+            ExecutionContext execution(context, thread_context, nullptr);
+            OperatorSourceInput input{*sort_source, *sort_local_source, interrupt};
+            auto started = Clock::now();
+            local_done = sort->GetData(execution, local_chunk, input) == SourceResultType::FINISHED;
+            local_source_seconds += std::chrono::duration<double>(Clock::now() - started).count();
+            if (local_done) {
+                local_finished = Clock::now();
+            }
+        }
         local_pos = 0;
         if (!local_chunk.size()) {
             return false;
         }
-        MakeKeys(local_chunk, local_keys);
+        if (merge_branches) {
+            MakeKeys(local_chunk, local_keys);
+        }
         return true;
     }
 
@@ -790,25 +887,53 @@ public:
             return true;
         }
         remote_pos = 0;
-        if (!remote_cursor || !remote_cursor->Next(remote_chunk, [&]() { return Pop(); })) {
-            return false;
+        remote_chunk.Reset();
+        while (!remote_segment || !remote_segment->Scan(remote_scan, remote_chunk)) {
+            // Reset scan pins before releasing the consumed segment and its spill blocks.
+            remote_scan.current_chunk_state.handles.clear();
+            remote_segment = Pop();
+            if (!remote_segment) {
+                return false;
+            }
+            remote_segment->InitializeScan(remote_scan);
         }
-        MakeKeys(remote_chunk, remote_keys);
+        if (merge_branches) {
+            MakeKeys(remote_chunk, remote_keys);
+        }
         return true;
     }
 
-    bool LocalFirst() {
-        auto left = local_keys.Values<string_t>()[local_pos].GetValue();
-        auto right = remote_keys.Values<string_t>()[remote_pos].GetValue();
+    bool LocalFirst(idx_t local_index, idx_t remote_index) {
+        auto left = local_keys.Values<string_t>()[local_index].GetValue();
+        auto right = remote_keys.Values<string_t>()[remote_index].GetValue();
         auto size = MinValue<idx_t>(left.GetSize(), right.GetSize());
         auto comparison = memcmp(left.GetData(), right.GetData(), size);
         return comparison < 0 || (comparison == 0 && left.GetSize() <= right.GetSize());
     }
 
-    void ScanInternal(DataChunk &output) {
-        if (!initialized) {
-            Initialize();
+    idx_t MergePrefix(bool take_local, idx_t end) {
+        auto begin = (take_local ? local_pos : remote_pos) + 1;
+        // Alternating/random keys usually produce very short runs; avoid a binary search for those.
+        auto probe_end = MinValue<idx_t>(end, begin + 8);
+        while (begin < probe_end) {
+            if (LocalFirst(take_local ? begin : local_pos, take_local ? remote_pos : begin) != take_local) {
+                return begin;
+            }
+            ++begin;
         }
+        // Both chunks are sorted: find the first row that belongs after the other branch's head.
+        while (begin < end) {
+            auto middle = begin + (end - begin) / 2;
+            if (LocalFirst(take_local ? middle : local_pos, take_local ? remote_pos : middle) == take_local) {
+                begin = middle + 1;
+            } else {
+                end = middle;
+            }
+        }
+        return begin;
+    }
+
+    void ScanInternal(DataChunk &output) {
         CheckWorker();
         SelectionVector selection(STANDARD_VECTOR_SIZE);
         while (output.size() < STANDARD_VECTOR_SIZE) {
@@ -817,22 +942,37 @@ public:
             if (!have_local && !have_remote) {
                 break;
             }
-            auto take_local = have_local && (!have_remote || LocalFirst());
+            auto take_local = have_local && (!have_remote || LocalFirst(local_pos, remote_pos));
             auto &chunk = take_local ? local_chunk : remote_chunk;
             auto &position = take_local ? local_pos : remote_pos;
-            idx_t count = 0;
-            do {
-                selection.set_index(count++, position++);
-            } while (position < chunk.size() && output.size() + count < STANDARD_VECTOR_SIZE &&
-                     (!have_local || !have_remote || LocalFirst() == take_local));
+            auto end = have_local && have_remote ? MergePrefix(take_local, chunk.size()) : chunk.size();
+            auto count = end - position;
+            // Keep long ordered spans as references. Pack short, interleaved spans into full chunks.
+            if (!output.size() && (count >= STANDARD_VECTOR_SIZE / 8 || !have_local || !have_remote)) {
+                output.Reference(chunk);
+                output.Slice(position, count);
+                position = end;
+                output_reference_rows += count;
+                return;
+            }
+            count = MinValue<idx_t>(count, STANDARD_VECTOR_SIZE - output.size());
+            for (idx_t i = 0; i < count; ++i) {
+                selection.set_index(i, position++);
+            }
             output.Append(chunk, selection, count);
+            output_copied_rows += count;
         }
     }
 
     void Scan(DataChunk &output) {
+        if (!initialized) {
+            Initialize();
+        }
         merged_chunk.Reset();
+        auto started = Clock::now();
         ScanInternal(merged_chunk);
         data.Project(merged_chunk, output);
+        merge_seconds += std::chrono::duration<double>(Clock::now() - started).count();
     }
 
     void Metrics(OperatorMetrics &metrics) {
@@ -842,15 +982,28 @@ public:
         metrics.AddExtraInfo("Remote Rows", std::to_string(remote_rows));
         metrics.AddExtraInfo("Thread Count", std::to_string(thread_count));
         metrics.AddExtraInfo("Local Sort Workers", std::to_string(local_sort_workers));
+        metrics.AddExtraInfo("Local Source Workers", std::to_string(local_source_workers));
         metrics.AddExtraInfo("Peak Active Local Sort Tasks", std::to_string(local_sort_concurrency.peak));
-        metrics.AddExtraInfo("Queue High Watermark", std::to_string(queue_high_water));
-        metrics.AddExtraInfo("Bounds Seconds", std::to_string(bounds_seconds));
-        if (local_finished != Clock::time_point()) {
-            metrics.AddExtraInfo("Local Sort Seconds",
-                                 std::to_string(std::chrono::duration<double>(local_finished - local_started).count()));
+        metrics.AddExtraInfo("Remote Buffer Peak Segments", std::to_string(remote_buffer_peak_segments));
+        metrics.AddExtraInfo("Remote Buffer Peak Queued Bytes", std::to_string(remote_buffer_peak_bytes));
+        metrics.AddExtraInfo("Remote Rows Buffered Before Merge", std::to_string(remote_rows_before_merge));
+        if (remote_done && remote_started != Clock::time_point()) {
+            metrics.AddExtraInfo(
+                "Remote Read and Buffer Seconds",
+                std::to_string(std::chrono::duration<double>(remote_finished - remote_started).count()));
         }
-        if (remote_started != Clock::time_point() && local_finished != Clock::time_point()) {
-            auto end = remote_done ? MinValue(remote_finished, local_finished) : local_finished;
+        metrics.AddExtraInfo("Bounds Seconds", std::to_string(bounds_seconds));
+        metrics.AddExtraInfo("Merge Seconds", std::to_string(merge_seconds));
+        metrics.AddExtraInfo("Output Reference Rows", std::to_string(output_reference_rows));
+        metrics.AddExtraInfo("Output Copied Rows", std::to_string(output_copied_rows));
+        if (local_started != Clock::time_point()) {
+            metrics.AddExtraInfo("Local Run Build Seconds", std::to_string(local_run_build_seconds));
+            metrics.AddExtraInfo("Local Source Seconds", std::to_string(local_source_seconds));
+            metrics.AddExtraInfo("Local Sort Seconds", std::to_string(local_run_build_seconds + local_source_seconds));
+        }
+        if (remote_started != Clock::time_point() && local_started != Clock::time_point()) {
+            auto local_end = local_finished == Clock::time_point() ? Clock::now() : local_finished;
+            auto end = remote_done ? MinValue(remote_finished, local_end) : local_end;
             auto start = MaxValue(remote_started, local_started);
             auto overlap = MaxValue(0.0, std::chrono::duration<double>(end - start).count());
             metrics.AddExtraInfo("Branch Overlap Seconds", std::to_string(overlap));
@@ -871,18 +1024,24 @@ private:
     unique_ptr<Sort> sort;
     // Shared sink state receiving local workers' sorted runs.
     unique_ptr<GlobalSinkState> sort_sink;
-    // Global state for reading the completed local sort.
+    // Shared source state for merging the local sorted runs.
     unique_ptr<GlobalSourceState> sort_source;
-    // Scan thread's cursor into the local sort output.
+    // Scan thread's streaming sort cursor when only one source worker fits.
     unique_ptr<LocalSourceState> sort_local_source;
-    // Converts queued remote batches on the scan thread.
-    unique_ptr<ArrowCursor> remote_cursor;
+    // Ordered output of parallel local run merging; absent when the source uses a single worker.
+    unique_ptr<ColumnDataCollection> local_collection;
+    // Scan position and pins within local_collection, accessed only by the output thread.
+    ColumnDataScanState local_scan;
+    // Sealed buffer-managed segment currently being consumed by the merge.
+    unique_ptr<ColumnDataCollection> remote_segment;
+    // Scan position and pinned blocks within remote_segment; only the scan thread accesses these.
+    ColumnDataScanState remote_scan;
 
-    // Merged rows, including hidden keys, before applying the output projection.
+    // Referenced output span or packed chunk, including hidden keys, before the output projection.
     DataChunk merged_chunk;
     // Current sorted local chunk, retained until its rows have been merged.
     DataChunk local_chunk;
-    // Current converted remote chunk, retained until its rows have been merged.
+    // Current buffered remote chunk, retained until its rows have been merged.
     DataChunk remote_chunk;
     // Encoded ordering keys for local_chunk, used by LocalFirst().
     Vector local_keys;
@@ -896,6 +1055,8 @@ private:
     idx_t remote_pos = 0;
     // Both branch inputs have been prepared by Initialize().
     bool initialized = false;
+    // Both branches exist and need encoded keys for the ordered merge.
+    bool merge_branches = false;
     // Local sort signaled FINISHED; local_chunk may still contain unread rows.
     bool local_done = false;
 
@@ -903,36 +1064,52 @@ private:
     idx_t local_rows = 0;
     // Maximum number of worker-local sort states used.
     idx_t local_sort_workers = 0;
+    // Workers merging and materializing the local sorted runs.
+    idx_t local_source_workers = 0;
+    // Largest sampled input row width, used to cap concurrent source partitions under the memory budget.
+    idx_t local_row_width = 0;
+    // Local input read, conversion, sorted-run construction, and finalization.
+    double local_run_build_seconds = 0;
+    // Parallel materialization wall time, or accumulated serial source-call time.
+    double local_source_seconds = 0;
+    // Output scan time after initialization, including serial source reads when applicable.
+    double merge_seconds = 0;
+    // Rows emitted as references to ordered input spans.
+    idx_t output_reference_rows = 0;
+    // Rows copied into packed output chunks for short interleaved spans.
+    idx_t output_copied_rows = 0;
     // Tracks active/peak local tasks under its own mutex.
     LocalSortConcurrency local_sort_concurrency;
-    // Rows queued by the producer, including any not emitted.
+    // Rows converted and buffered by the producer, including any not emitted.
     idx_t remote_rows = 0;
-    // Largest number of queued remote batches observed.
-    idx_t queue_high_water = 0;
+    // Rows already buffered when local sort initialization finishes.
+    idx_t remote_rows_before_merge = 0;
+    // Managed allocation bytes in queued segments, including blocks spilled to disk.
+    idx_t remote_buffer_bytes = 0;
+    // Largest queued allocation size, excluding the active producer and consumer segments.
+    idx_t remote_buffer_peak_bytes = 0;
+    // Largest number of queued segments observed; queue depth never blocks the producer.
+    idx_t remote_buffer_peak_segments = 0;
     // Elapsed time for the partition bounds query.
     double bounds_seconds = 0;
     // Local sort setup begins, after opening its connection.
     Clock::time_point local_started;
-    // Local input consumed and sort sink finalized.
+    // Local sorted runs have been completely materialized (during initialization or serial source scans).
     Clock::time_point local_finished;
     // Producer starts executing the remote query.
     Clock::time_point remote_started;
     // Producer finishes, stops, or encounters an error.
     Clock::time_point remote_finished;
 
-    // Protects the queue, remote schema/status/errors, and remote metrics.
+    // Protects the segment queue, remote status/errors, and remote metrics.
     std::mutex queue_mutex;
-    // Signals schema/data/completion, available queue capacity, or stop.
+    // Signals published segments, producer completion, or stop to a waiting consumer.
     std::condition_variable queue_cv;
-    // At most two remote batches waiting for conversion.
-    std::deque<unique_ptr<ArrowArrayWrapper>> queue;
-    // Published by the producer, then moved into remote_cursor.
-    Handle<ArrowSchema> remote_schema;
-    // Producer has published the remote Arrow schema.
-    bool schema_ready = false;
+    // Immutable segments in stream order; their values can spill under DuckDB's memory limit.
+    std::deque<unique_ptr<ColumnDataCollection>> queue;
     // Producer has exited, or this execution has no remote branch.
     bool remote_done = false;
-    // Requests producer shutdown and interrupts its queue-capacity wait.
+    // Requests producer shutdown between conversion chunks and driver calls.
     bool stopped = false;
     // Producer exception message, rethrown on the scan thread.
     string worker_error;

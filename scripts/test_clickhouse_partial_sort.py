@@ -578,7 +578,13 @@ class PartialSortTests(unittest.TestCase):
                     self.assertIsNotNone(extra)
                     self.assertEqual(int(extra["Local Rows"]), 1000000)
                     self.assertEqual(int(extra["Remote Rows"]), 1000000)
-                    self.assertLessEqual(int(extra["Queue High Watermark"]), 2)
+                    referenced = int(extra["Output Reference Rows"])
+                    copied = int(extra["Output Copied Rows"])
+                    self.assertEqual(referenced + copied, 2000000)
+                    # Short segment tails can be packed, but most of these noninterleaved rows need no copy.
+                    self.assertGreater(referenced, 1000000)
+                    self.assertGreater(int(extra["Remote Buffer Peak Segments"]), 0)
+                    self.assertGreater(int(extra["Remote Buffer Peak Queued Bytes"]), 0)
                     self.assertGreater(float(extra["Branch Overlap Seconds"]), 0)
                     self.assertGreater(system_metric(data, "peak_temp_dir_size"), 0)
 
@@ -608,6 +614,172 @@ class PartialSortTests(unittest.TestCase):
             ),
             intervals,
         )
+
+    def test_remote_spool_during_slow_local_read(self):
+        h = self.harness
+        h.create("backpressure", "id UInt64, score Int64, payload String")
+        h.execute(
+            f"INSERT INTO {h.source('backpressure')} SELECT number, "
+            "toInt64(number * 7919 % 1009), randomPrintableASCII(512) FROM numbers(1000000)"
+        )
+        h.execute(
+            f"CREATE VIEW {h.source('slow_local')} AS SELECT *, "
+            "if(id < 500000, sleepEachRow(0.00001), toUInt8(0)) AS delay "
+            f"FROM {h.source('backpressure')} "
+            "SETTINGS max_block_size=256, max_threads=1, short_circuit_function_evaluation='force_enable'"
+        )
+        function = h.function("slow_local")
+        with tempfile.TemporaryDirectory() as temporary:
+            expected = Path(temporary) / "expected.csv"
+            actual = Path(temporary) / "actual.csv"
+            profile = Path(temporary) / "profile.json"
+            h.run(
+                f"COPY (SELECT * FROM {h.read('SELECT * FROM ' + h.source('slow_local'))} "
+                f"ORDER BY score ASC NULLS LAST, id ASC NULLS LAST) TO {literal(expected)} (FORMAT CSV)"
+            )
+            h.run(
+                "SET threads=2; SET memory_limit='512MiB'; "
+                f"PRAGMA enable_profiling='json'; SET profiling_output={literal(profile)}; "
+                f"COPY (SELECT * FROM {function}) TO {literal(actual)} (FORMAT CSV)"
+            )
+            self.assertTrue(filecmp.cmp(expected, actual, shallow=False))
+            metrics = find_partial_sort_metrics(json.loads(profile.read_text()))
+            # The remote half must drain while the local view is still sleeping.
+            # A two-batch queue cannot drain this stream; run a server with a short
+            # http_send_timeout to exercise the original socket-timeout failure too.
+            self.assertEqual(int(metrics["Remote Rows Buffered Before Merge"]), 500000)
+            self.assertGreater(int(metrics["Remote Buffer Peak Segments"]), 2)
+
+            for label, settings, query, message in (
+                ("limit", "", f"SELECT * FROM {function} LIMIT 1", None),
+                (
+                    "cancel",
+                    "SET max_execution_time=250; ",
+                    "EXECUTE interrupted",
+                    "maximum execution time",
+                ),
+                (
+                    "oom",
+                    "SET memory_limit='1MiB'; ",
+                    f"SELECT * FROM {function}",
+                    "out of memory",
+                ),
+            ):
+                with self.subTest(cleanup=label):
+                    spill = Path(temporary) / label
+                    # Keep payload/delay projected and exercise deadline checks even with a small source.
+                    prepare = (
+                        "PREPARE interrupted AS SELECT sum(random() + length(payload) + delay) "
+                        f"FROM {function} CROSS JOIN range(1000000); "
+                        if label == "cancel"
+                        else ""
+                    )
+                    result = h.run(
+                        f"SET temp_directory={literal(spill)}; SET threads=2; "
+                        + prepare
+                        + settings
+                        + query,
+                        check=False,
+                        timeout=30,
+                    )
+                    if message:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(message, result.stderr.lower())
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(any(path.is_file() for path in spill.rglob("*")))
+
+    def test_remote_only_spool_spills(self):
+        h = self.harness
+        h.create(
+            "remote_spill",
+            "id UInt64, payload Nullable(String), items Array(Nullable(Int32))",
+        )
+        h.execute(
+            f"INSERT INTO {h.source('remote_spill')} SELECT number, "
+            "if(number % 17 = 0, NULL, concat(toString(number), repeat('x',128))), "
+            "[toInt32(number), NULL, -toInt32(number)] FROM numbers(1000000)"
+        )
+        function = h.function("remote_spill", "1", keys=("id",))
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = Path(temporary) / "profile.json"
+            expected = Path(temporary) / "expected.csv"
+            actual = Path(temporary) / "actual.csv"
+            # An expensive consumer lets the producer drain ahead of the merge.
+            projection = "id, sha256(repeat(payload,16)) AS digest, items"
+            h.run(
+                f"COPY (SELECT {projection} FROM {h.read('SELECT * FROM ' + h.source('remote_spill'))} "
+                f"ORDER BY id) TO {literal(expected)} (FORMAT CSV)"
+            )
+            h.run(
+                "SET threads=1; SET memory_limit='16MiB'; "
+                f"PRAGMA enable_profiling='json'; SET profiling_output={literal(profile)}; "
+                f"COPY (SELECT {projection} FROM {function}) TO {literal(actual)} (FORMAT CSV)"
+            )
+            self.assertTrue(filecmp.cmp(expected, actual, shallow=False))
+            profile_data = json.loads(profile.read_text())
+            metrics = find_partial_sort_metrics(profile_data)
+            self.assertEqual(int(metrics["Local Rows"]), 0)
+            self.assertEqual(int(metrics["Remote Rows"]), 1000000)
+            # There is no local sort here: any spilling belongs to the remote buffer.
+            self.assertGreater(system_metric(profile_data, "peak_temp_dir_size"), 0)
+
+            spill = Path(temporary) / "limited"
+            result = h.run(
+                f"SET temp_directory={literal(spill)}; SET threads=1; SET memory_limit='16MiB'; "
+                "SET max_temp_directory_size='1KiB'; "
+                f"COPY (SELECT {projection} FROM {function}) TO {literal(os.devnull)} (FORMAT CSV)",
+                check=False,
+                timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("max_temp_directory_size", result.stderr.lower())
+            self.assertFalse(any(path.is_file() for path in spill.rglob("*")))
+
+    def test_merge_spans_and_parallel_source(self):
+        h = self.harness
+        rows = 262144
+        for pattern, score in (
+            ("alternating", "(number % 131072) * 2 + toUInt64(number >= 131072)"),
+            ("runs", "intDiv(number % 131072, 4096)"),
+        ):
+            h.create(
+                pattern,
+                "id UInt64, score UInt64, payload Nullable(String), items Array(Nullable(Int32))",
+            )
+            h.execute(
+                f"INSERT INTO {h.source(pattern)} SELECT number, {score}, "
+                "if(number % 13 = 0, NULL, concat(toString(number), repeat('x',128))), "
+                "[toInt32(number), NULL, -toInt32(number)] FROM numbers(262144)"
+            )
+            with tempfile.TemporaryDirectory() as temporary:
+                expected = Path(temporary) / "expected.csv"
+                actual = Path(temporary) / "actual.csv"
+                profile = Path(temporary) / "profile.json"
+                h.run(
+                    f"COPY (SELECT * FROM {h.read('SELECT * FROM ' + h.source(pattern))} "
+                    f"ORDER BY score ASC NULLS LAST, id ASC NULLS LAST) TO {literal(expected)} (FORMAT CSV)"
+                )
+                for ratio in ("0", "0.5", "1"):
+                    with self.subTest(pattern=pattern, ratio=ratio):
+                        h.run(
+                            "SET threads=4; SET memory_limit='512MiB'; "
+                            f"PRAGMA enable_profiling='json'; SET profiling_output={literal(profile)}; "
+                            f"COPY (SELECT * FROM {h.function(pattern, ratio)}) TO {literal(actual)} (FORMAT CSV)"
+                        )
+                        self.assertTrue(filecmp.cmp(expected, actual, shallow=False))
+                        metrics = find_partial_sort_metrics(
+                            json.loads(profile.read_text())
+                        )
+                        referenced = int(metrics["Output Reference Rows"])
+                        copied = int(metrics["Output Copied Rows"])
+                        self.assertEqual(referenced + copied, rows)
+                        if ratio == "0.5" and pattern == "alternating":
+                            self.assertGreater(copied, rows // 2)
+                        else:
+                            self.assertGreater(referenced, rows // 2)
+                        if ratio != "1":
+                            self.assertGreater(int(metrics["Local Source Workers"]), 1)
 
     def test_range_pruning_over_adbc(self):
         h = self.harness
