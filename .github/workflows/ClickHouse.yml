@@ -1,0 +1,34 @@
+name: ClickHouse partial sort
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  clickhouse:
+    runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.8.2.7
+        env:
+          CLICKHOUSE_SKIP_USER_SETUP: "1"
+        ports:
+          - 8123:8123
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: columnar-tech/setup-dbc@v1
+      - name: Install ClickHouse ADBC driver
+        run: dbc install 'clickhouse=0.1.1'
+      - name: Build
+        run: GEN=ninja CMAKE_BUILD_PARALLEL_LEVEL=2 make release
+      - name: Test arguments and ADBC integration
+        env:
+          ADBC_DRIVER_PATH: /home/runner/.config/adbc/drivers
+        run: |
+          ./build/release/test/unittest test/sql/partial_sort_arguments.test
+          python3 scripts/test_clickhouse_partial_sort.py
