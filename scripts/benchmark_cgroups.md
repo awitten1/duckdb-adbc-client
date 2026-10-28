@@ -52,10 +52,14 @@ Run DuckDB interactively in its slice:
 bash scripts/run_duckdb_cgroup.sh ./build/release/duckdb -unsigned
 ```
 
-Then load the extension and set the application CPU and memory budgets,
-leaving room for Arrow/driver buffers below the slice's 64 GiB cap. The pinned
-DuckDB build still defaults to 40 threads and 125.8 GiB on this host even
-inside the slice, so set these explicitly:
+The launcher mirrors the slice's CPU quota and memory cap on the transient
+scope because this DuckDB build only detects limits on its own cgroup, not
+parent cgroups. With the default slice configuration, DuckDB automatically
+selects 16 threads and 80% of the 64 GiB cap for memory (displayed as
+`51.1 GiB` by this build).
+
+Load the extension. To reproduce the benchmark's explicit 56 GiB memory
+budget, leaving room for Arrow/driver buffers below the 64 GiB cap, use:
 
 ```sql
 LOAD 'build/release/extension/adbc/adbc.duckdb_extension';
