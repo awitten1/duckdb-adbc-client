@@ -272,6 +272,8 @@ The sort function supports projection pushdown. Execution reads only the columns
 
 ### Testing and benchmarking partial sort
 
+The versioned [experiment runners](scripts/experiments/README.md) reproduce the SF25 before/after comparison, full-transfer Native/Arrow format measurements, and server-only perf captures. Generated datasets and results stay under ignored `build/` directories.
+
 For separate CPU sets and memory limits on this benchmark machine, see
 [benchmark cgroups](scripts/benchmark_cgroups.md).
 
