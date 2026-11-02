@@ -16,9 +16,9 @@
 // under the License.
 
 #pragma once
-#include "duckdb/function/table/arrow.hpp"
 #include "adbc_connection_pool.hpp"
 #include "adbc_util.hpp"
+#include "duckdb/function/table/arrow.hpp"
 
 namespace duckdb {
 namespace adbc {
@@ -48,6 +48,7 @@ public:
     unique_ptr<ArrowArrayStreamWrapper> ProduceStream(ArrowStreamParameters &parameters) override;
 
 private:
+    string uri;
     unique_ptr<AdbcPooledConnection> connection;
     string query_text;
     string table;

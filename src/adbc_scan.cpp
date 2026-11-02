@@ -24,10 +24,39 @@ namespace adbc {
 
 using namespace Private;
 
+namespace {
+
+// Direct read_adbc executions own their handles separately from schema discovery.
+class AdbcExecutionStream : public ArrowArrayStreamWrapper {
+public:
+    AdbcExecutionStream(const string &uri, const string &sql)
+        : connection(make_uniq<AdbcConnection>(uri)), statement(connection->MakeStatement(sql)) {
+    }
+
+    ~AdbcExecutionStream() override {
+        // The stream must be released before its statement and connection.
+        if (arrow_array_stream.release) {
+            arrow_array_stream.release(&arrow_array_stream);
+            arrow_array_stream.release = nullptr;
+        }
+    }
+
+    void Execute() {
+        Handle<Private::AdbcError> error;
+        CHECK_ADBC(AdbcStatementExecuteQuery(statement.get(), &arrow_array_stream, nullptr, error.get()), IOException);
+    }
+
+private:
+    unique_ptr<AdbcConnection> connection;
+    Handle<Private::AdbcStatement> statement;
+};
+
+} // namespace
+
 AdbcArrowStreamFactory::AdbcArrowStreamFactory(const string &uri, const string &query_text)
 
-    : connection(AdbcConnectionPool::GetEphemeralConnection(uri)), query_text(query_text), table(), delimiter(),
-      statement(connection->GetConnection().MakeStatement(query_text)) {
+    : uri(uri), connection(AdbcConnectionPool::GetEphemeralConnection(uri)), query_text(query_text), table(),
+      delimiter(), statement(connection->GetConnection().MakeStatement(query_text)) {
 }
 
 AdbcArrowStreamFactory::AdbcArrowStreamFactory(unique_ptr<AdbcPooledConnection> conn,
@@ -99,6 +128,14 @@ void AdbcArrowStreamFactory::GetSchema(ArrowSchema &schema) {
 }
 
 unique_ptr<ArrowArrayStreamWrapper> AdbcArrowStreamFactory::ProduceStream(ArrowStreamParameters &parameters) {
+
+    if (!projection_pushdown) {
+        // A cancelled schema probe or early LIMIT can leave a driver session busy.
+        // Never reuse that session, or a binding-time result, for query execution.
+        auto stream = make_uniq<AdbcExecutionStream>(uri, query_text);
+        stream->Execute();
+        return std::move(stream);
+    }
 
     // Apply projection pushdown
     auto &columns = parameters.projected_columns.columns;

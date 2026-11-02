@@ -21,6 +21,7 @@
 #include "adbc_extension.hpp"
 #include "adbc_clear_cache.hpp"
 #include "adbc_execute.hpp"
+#include "adbc_partial_sort.hpp"
 #include "adbc_scan.hpp"
 #include "adbc_storage.hpp"
 #include "adbc_util.hpp"
@@ -33,6 +34,8 @@
 namespace duckdb {
 
 static void LoadInternal(ExtensionLoader &loader) {
+
+    adbc::RegisterAdbcPartialSort(loader);
 
     // Construct a read_adbc(uri, query) function to read from ADBC
     TableFunction read_adbc_function("read_adbc",

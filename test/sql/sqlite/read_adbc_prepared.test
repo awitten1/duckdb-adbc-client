@@ -1,0 +1,42 @@
+# name: test/sql/sqlite/read_adbc_prepared.test
+# description: Direct ADBC scans execute against current data on every execution
+# group: [sqlite]
+
+require adbc
+
+require-env ADBC_DRIVER_PATH
+
+statement ok
+COPY (SELECT unnest(['profile_version = 1', 'driver = "sqlite"', '[Options]', 'uri = ''{TEST_DIR}/prepared.sqlite'''])) TO '{TEST_DIR}/prepared.toml' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '')
+
+statement ok
+CALL adbc_execute('profile://{TEST_DIR}/prepared.toml', 'CREATE TABLE numbers (x INTEGER)')
+
+statement ok
+CALL adbc_execute('profile://{TEST_DIR}/prepared.toml', 'INSERT INTO numbers VALUES (1),(2),(3)')
+
+statement ok
+PREPARE p AS SELECT sum(x)::BIGINT FROM read_adbc('profile://{TEST_DIR}/prepared.toml', 'SELECT x FROM numbers')
+
+# A schema probe must not become a cached result from before this insert.
+statement ok
+CALL adbc_execute('profile://{TEST_DIR}/prepared.toml', 'INSERT INTO numbers VALUES (4)')
+
+query I
+EXECUTE p
+----
+10
+
+statement ok
+CALL adbc_execute('profile://{TEST_DIR}/prepared.toml', 'INSERT INTO numbers VALUES (5)')
+
+query I
+EXECUTE p
+----
+15
+
+# Independent executions still apply DuckDB's column projection correctly.
+query I
+SELECT count(*) FROM read_adbc('profile://{TEST_DIR}/prepared.toml', 'SELECT x, x + 10 AS y FROM numbers')
+----
+5
