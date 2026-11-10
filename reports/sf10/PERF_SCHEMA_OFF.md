@@ -90,6 +90,46 @@ sorted merge. Narrowing the projection changes storage reads, encoding,
 transfer, decoding, and sorting together, so the width experiment cannot
 assign its entire saving to the network.
 
+### Serialization and deserialization controls
+
+I reran the unsorted `SELECT *` with four ClickHouse threads and response
+compression off, alternating Native and ArrowStream order. All four paths
+read 15 million rows and 1.648 GB of table data. `curl` discarded the
+response without parsing it; the ADBC path decoded Arrow into DuckDB.
+
+| Output and client | Wall time (s) | ClickHouse CPU (core-s) | Wire bytes (GB) |
+|---|---:|---:|---:|
+| `FORMAT Null` to `/dev/null` | 0.257 | 0.985 | ~0 |
+| `FORMAT Native` to `/dev/null` | 0.349 | 1.287 | 2.024 |
+| `FORMAT ArrowStream` to `/dev/null` | 0.532 | 1.627 | 1.935 |
+| ArrowStream through ADBC | 0.680 | 1.908 | 1.935 |
+
+The `Null` control confirms that the table scan itself takes substantial
+time. Producing and sending ArrowStream adds about 0.275 seconds of wall
+time and 0.642 ClickHouse core-seconds relative to that control. Native
+output adds 0.092 seconds and 0.302 core-seconds. ArrowStream is 0.183
+seconds slower than Native despite sending fewer bytes; its output
+processor was active for 0.493 seconds versus 0.210 for Native. Server
+socket-send time was 0.135/0.157 seconds for Arrow/Native, so the format
+production path explains more of their difference than bytes on loopback.
+
+The ADBC scan takes about 0.148 seconds longer than an ArrowStream download
+that discards the bytes. Its client process uses about 0.724 core-seconds,
+versus roughly 0.13 for `curl`; `perf` places 30.1% of sampled client cycles
+in DuckDB's Arrow-to-vector conversion and 16.4% in a connector stream
+iterator. The server Arrow output processor grows from 0.493 to 0.645
+seconds when ADBC consumes the stream, consistent with client-side parsing
+and conversion slowing the producer. This comparison also changes the
+client program and includes driver setup, so 0.148 seconds is an observed
+incremental latency, not a pure deserializer timer.
+
+Taken together, the no-output control and the ADBC scan differ by 0.423
+seconds. That is a useful measure of the **whole output path** under these
+conditions: format production, transfer, client parsing/conversion, and
+setup, with overlap between stages. It is a major part of a simple scan
+and the DuckDB local-sort floor. It is smaller than the 2.188-second
+ClickHouse sorted merge or the hybrid's 1.658-second output merge loop.
+
 Adding DuckDB's full price sort raised query time only from 0.674 to 1.046
 seconds. It used 3.184 client core-seconds; hot functions were string gather
 (11.2% of client samples), `memmove` (10.1%), and sort-key/radix operations.
@@ -140,6 +180,10 @@ insertion is a prominent server hot spot.
 
 The raw timing summaries, query and processor logs, and `perf.data` files
 are under ignored `build/local-experiments/sf10-schema-perf-20261109/`.
+The serialization controls are under ignored
+`build/local-experiments/sf10-serialization-formats-{a,b}/`,
+`build/local-experiments/sf10-serialization-null/`, and
+`build/local-experiments/sf10-serialization-adbc/`.
 The selected connector is the local
 `libadbc_clickhouse_schema_nocompress.so` in ignored
 `build/local-experiments/adbc-clickhouse-experiment-libs/` (SHA-256
