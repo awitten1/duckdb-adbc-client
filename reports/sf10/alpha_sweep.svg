@@ -63,7 +63,7 @@
 <g fill="none" color="black" stroke="rgb( 85,  85,  85)" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="gray" stroke="currentColor" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M72.53,315.52 L574.82,315.52  '/></g>
+	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M72.53,315.52 L424.43,315.52 M566.43,315.52 L574.82,315.52  '/></g>
 <g fill="none" color="gray" stroke="rgb(221, 221, 221)" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
@@ -155,7 +155,7 @@
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='black'  d='M473.43,367.40 L473.43,322.40 L566.43,322.40 L566.43,367.40 L473.43,367.40 Z  '/></g>
+	<path stroke='black'  d='M424.43,367.40 L424.43,307.40 L566.43,307.40 L566.43,367.40 L424.43,367.40 Z  '/></g>
 	<g id="gnuplot_plot_1a"  fill="none"><title>gnuplot_plot_1a</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb( 35, 105, 168)'  d='M95.36,85.82 L95.36,73.27 M90.86,85.82 L99.86,85.82 M90.86,73.27 L99.86,73.27 M209.52,133.38 L209.52,120.87
@@ -206,13 +206,17 @@
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M95.36,124.94 L209.52,124.94 L323.68,124.94 L437.83,124.94 L551.99,124.94  '/></g>
 	</g>
+	<g id="gnuplot_plot_5a"  fill="none"><title>gnuplot_plot_5a</title>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(102, 102, 102)' stroke-dasharray=' 8,4,2,4'  d='M95.36,136.70 L209.52,136.70 L323.68,136.70 L437.83,136.70 L551.99,136.70  '/></g>
+	</g>
 	<g stroke='none' shape-rendering='crispEdges'>
-		<polygon fill = '#FFFFFF' points = '473.43,367.40 566.43,367.40 566.43,322.40 473.43,322.40 '/>
+		<polygon fill = '#FFFFFF' points = '424.43,367.40 566.43,367.40 566.43,307.40 424.43,307.40 '/>
 	</g>
 <g fill="none" color="#FFFFFF" stroke="#FFFFFF" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='black'  d='M473.43,367.40 L473.43,322.40 L566.43,322.40 L566.43,367.40 L473.43,367.40 Z  '/></g>
+	<path stroke='black'  d='M424.43,367.40 L424.43,307.40 L566.43,307.40 L566.43,367.40 L424.43,367.40 Z  '/></g>
 	<g id="gnuplot_plot_1a"  fill="none"><title>gnuplot_plot_1a</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -221,33 +225,42 @@
 <g fill="none" color="#FFFFFF" stroke="rgb( 35, 105, 168)" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(515.43,333.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(515.43,318.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>Hybrid</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb( 35, 105, 168)'  d='M522.43,329.90 L559.43,329.90  '/>	<use xlink:href='#gpPt6' transform='translate(540.93,329.90) scale(4.05)' color='rgb( 35, 105, 168)'/>
+	<path stroke='rgb( 35, 105, 168)'  d='M522.43,314.90 L559.43,314.90  '/>	<use xlink:href='#gpPt6' transform='translate(540.93,314.90) scale(4.05)' color='rgb( 35, 105, 168)'/>
 </g>
 	</g>
 	<g id="gnuplot_plot_3a"  fill="none"><title>gnuplot_plot_3a</title>
 <g fill="none" color="#FFFFFF" stroke="rgb( 35, 105, 168)" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(515.43,348.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(515.43,333.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>DuckDB</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(180,  83,  32)' stroke-dasharray=' 5,8'  d='M522.43,344.90 L559.43,344.90  '/></g>
+	<path stroke='rgb(180,  83,  32)' stroke-dasharray=' 5,8'  d='M522.43,329.90 L559.43,329.90  '/></g>
 	</g>
 	<g id="gnuplot_plot_4a"  fill="none"><title>gnuplot_plot_4a</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(515.43,363.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(515.43,348.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>Remote</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M522.43,359.90 L559.43,359.90  '/></g>
+	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M522.43,344.90 L559.43,344.90  '/></g>
+	</g>
+	<g id="gnuplot_plot_5a"  fill="none"><title>gnuplot_plot_5a</title>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<g transform="translate(515.43,363.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+		<text>Unsorted read</text>
+	</g>
+</g>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(102, 102, 102)' stroke-dasharray=' 8,4,2,4'  d='M522.43,359.90 L559.43,359.90  '/></g>
 	</g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -290,7 +303,7 @@
 <g fill="none" color="black" stroke="rgb( 85,  85,  85)" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="gray" stroke="currentColor" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M672.53,325.67 L1073.43,325.67 M1166.43,325.67 L1174.82,325.67  '/></g>
+	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M672.53,325.67 L1024.43,325.67 M1166.43,325.67 L1174.82,325.67  '/></g>
 <g fill="none" color="gray" stroke="rgb(221, 221, 221)" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
@@ -395,7 +408,7 @@
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='black'  d='M1073.43,367.40 L1073.43,322.40 L1166.43,322.40 L1166.43,367.40 L1073.43,367.40 Z  '/></g>
+	<path stroke='black'  d='M1024.43,367.40 L1024.43,307.40 L1166.43,307.40 L1166.43,367.40 L1024.43,367.40 Z  '/></g>
 	<g id="gnuplot_plot_1b"  fill="none"><title>gnuplot_plot_1b</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb( 35, 105, 168)'  d='M695.36,120.06 L695.36,100.87 M690.86,120.06 L699.86,120.06 M690.86,100.87 L699.86,100.87 M809.52,142.20 L809.52,129.24
@@ -446,13 +459,17 @@
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M695.36,82.82 L809.52,82.82 L923.68,82.82 L1037.83,82.82 L1151.99,82.82  '/></g>
 	</g>
+	<g id="gnuplot_plot_5b"  fill="none"><title>gnuplot_plot_5b</title>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(102, 102, 102)' stroke-dasharray=' 8,4,2,4'  d='M695.36,176.65 L809.52,176.65 L923.68,176.65 L1037.83,176.65 L1151.99,176.65  '/></g>
+	</g>
 	<g stroke='none' shape-rendering='crispEdges'>
-		<polygon fill = '#FFFFFF' points = '1073.43,367.40 1166.43,367.40 1166.43,322.40 1073.43,322.40 '/>
+		<polygon fill = '#FFFFFF' points = '1024.43,367.40 1166.43,367.40 1166.43,307.40 1024.43,307.40 '/>
 	</g>
 <g fill="none" color="#FFFFFF" stroke="#FFFFFF" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='black'  d='M1073.43,367.40 L1073.43,322.40 L1166.43,322.40 L1166.43,367.40 L1073.43,367.40 Z  '/></g>
+	<path stroke='black'  d='M1024.43,367.40 L1024.43,307.40 L1166.43,307.40 L1166.43,367.40 L1024.43,367.40 Z  '/></g>
 	<g id="gnuplot_plot_1b"  fill="none"><title>gnuplot_plot_1b</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -461,33 +478,42 @@
 <g fill="none" color="#FFFFFF" stroke="rgb( 35, 105, 168)" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(1115.43,333.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(1115.43,318.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>Hybrid</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb( 35, 105, 168)'  d='M1122.43,329.90 L1159.43,329.90  '/>	<use xlink:href='#gpPt6' transform='translate(1140.93,329.90) scale(4.05)' color='rgb( 35, 105, 168)'/>
+	<path stroke='rgb( 35, 105, 168)'  d='M1122.43,314.90 L1159.43,314.90  '/>	<use xlink:href='#gpPt6' transform='translate(1140.93,314.90) scale(4.05)' color='rgb( 35, 105, 168)'/>
 </g>
 	</g>
 	<g id="gnuplot_plot_3b"  fill="none"><title>gnuplot_plot_3b</title>
 <g fill="none" color="#FFFFFF" stroke="rgb( 35, 105, 168)" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(1115.43,348.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(1115.43,333.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>DuckDB</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(180,  83,  32)' stroke-dasharray=' 5,8'  d='M1122.43,344.90 L1159.43,344.90  '/></g>
+	<path stroke='rgb(180,  83,  32)' stroke-dasharray=' 5,8'  d='M1122.43,329.90 L1159.43,329.90  '/></g>
 	</g>
 	<g id="gnuplot_plot_4b"  fill="none"><title>gnuplot_plot_4b</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(1115.43,363.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(1115.43,348.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>Remote</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M1122.43,359.90 L1159.43,359.90  '/></g>
+	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M1122.43,344.90 L1159.43,344.90  '/></g>
+	</g>
+	<g id="gnuplot_plot_5b"  fill="none"><title>gnuplot_plot_5b</title>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<g transform="translate(1115.43,363.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+		<text>Unsorted read</text>
+	</g>
+</g>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(102, 102, 102)' stroke-dasharray=' 8,4,2,4'  d='M1122.43,359.90 L1159.43,359.90  '/></g>
 	</g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -530,7 +556,7 @@
 <g fill="none" color="black" stroke="rgb( 85,  85,  85)" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="gray" stroke="currentColor" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M72.53,758.58 L473.43,758.58 M566.43,758.58 L574.82,758.58  '/></g>
+	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M72.53,758.58 L424.43,758.58 M566.43,758.58 L574.82,758.58  '/></g>
 <g fill="none" color="gray" stroke="rgb(221, 221, 221)" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
@@ -543,7 +569,7 @@
 <g fill="none" color="black" stroke="rgb( 85,  85,  85)" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="gray" stroke="currentColor" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M72.53,724.76 L574.82,724.76  '/></g>
+	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M72.53,724.76 L424.43,724.76 M566.43,724.76 L574.82,724.76  '/></g>
 <g fill="none" color="gray" stroke="rgb(221, 221, 221)" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
@@ -674,7 +700,7 @@
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='black'  d='M473.43,783.40 L473.43,738.40 L566.43,738.40 L566.43,783.40 L473.43,783.40 Z  '/></g>
+	<path stroke='black'  d='M424.43,783.40 L424.43,723.40 L566.43,723.40 L566.43,783.40 L424.43,783.40 Z  '/></g>
 	<g id="gnuplot_plot_1c"  fill="none"><title>gnuplot_plot_1c</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb( 35, 105, 168)'  d='M95.36,612.68 L95.36,606.39 M90.86,612.68 L99.86,612.68 M90.86,606.39 L99.86,606.39 M209.52,518.72 L209.52,514.99
@@ -725,13 +751,17 @@
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M95.36,547.04 L209.52,547.04 L323.68,547.04 L437.83,547.04 L551.99,547.04  '/></g>
 	</g>
+	<g id="gnuplot_plot_5c"  fill="none"><title>gnuplot_plot_5c</title>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(102, 102, 102)' stroke-dasharray=' 8,4,2,4'  d='M95.36,659.23 L209.52,659.23 L323.68,659.23 L437.83,659.23 L551.99,659.23  '/></g>
+	</g>
 	<g stroke='none' shape-rendering='crispEdges'>
-		<polygon fill = '#FFFFFF' points = '473.43,783.40 566.43,783.40 566.43,738.40 473.43,738.40 '/>
+		<polygon fill = '#FFFFFF' points = '424.43,783.40 566.43,783.40 566.43,723.40 424.43,723.40 '/>
 	</g>
 <g fill="none" color="#FFFFFF" stroke="#FFFFFF" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='black'  d='M473.43,783.40 L473.43,738.40 L566.43,738.40 L566.43,783.40 L473.43,783.40 Z  '/></g>
+	<path stroke='black'  d='M424.43,783.40 L424.43,723.40 L566.43,723.40 L566.43,783.40 L424.43,783.40 Z  '/></g>
 	<g id="gnuplot_plot_1c"  fill="none"><title>gnuplot_plot_1c</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -740,33 +770,42 @@
 <g fill="none" color="#FFFFFF" stroke="rgb( 35, 105, 168)" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(515.43,749.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(515.43,734.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>Hybrid</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb( 35, 105, 168)'  d='M522.43,745.90 L559.43,745.90  '/>	<use xlink:href='#gpPt6' transform='translate(540.93,745.90) scale(4.05)' color='rgb( 35, 105, 168)'/>
+	<path stroke='rgb( 35, 105, 168)'  d='M522.43,730.90 L559.43,730.90  '/>	<use xlink:href='#gpPt6' transform='translate(540.93,730.90) scale(4.05)' color='rgb( 35, 105, 168)'/>
 </g>
 	</g>
 	<g id="gnuplot_plot_3c"  fill="none"><title>gnuplot_plot_3c</title>
 <g fill="none" color="#FFFFFF" stroke="rgb( 35, 105, 168)" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(515.43,764.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(515.43,749.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>DuckDB</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(180,  83,  32)' stroke-dasharray=' 5,8'  d='M522.43,760.90 L559.43,760.90  '/></g>
+	<path stroke='rgb(180,  83,  32)' stroke-dasharray=' 5,8'  d='M522.43,745.90 L559.43,745.90  '/></g>
 	</g>
 	<g id="gnuplot_plot_4c"  fill="none"><title>gnuplot_plot_4c</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(515.43,779.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(515.43,764.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>Remote</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M522.43,775.90 L559.43,775.90  '/></g>
+	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M522.43,760.90 L559.43,760.90  '/></g>
+	</g>
+	<g id="gnuplot_plot_5c"  fill="none"><title>gnuplot_plot_5c</title>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<g transform="translate(515.43,779.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+		<text>Unsorted read</text>
+	</g>
+</g>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(102, 102, 102)' stroke-dasharray=' 8,4,2,4'  d='M522.43,775.90 L559.43,775.90  '/></g>
 	</g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -809,7 +848,7 @@
 <g fill="none" color="black" stroke="rgb( 85,  85,  85)" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="gray" stroke="currentColor" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M672.53,754.35 L1073.43,754.35 M1166.43,754.35 L1174.82,754.35  '/></g>
+	<path stroke='rgb(221, 221, 221)' stroke-dasharray='2,4' class="gridline"  d='M672.53,754.35 L1024.43,754.35 M1166.43,754.35 L1174.82,754.35  '/></g>
 <g fill="none" color="gray" stroke="rgb(221, 221, 221)" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
@@ -940,7 +979,7 @@
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='black'  d='M1073.43,783.40 L1073.43,738.40 L1166.43,738.40 L1166.43,783.40 L1073.43,783.40 Z  '/></g>
+	<path stroke='black'  d='M1024.43,783.40 L1024.43,723.40 L1166.43,723.40 L1166.43,783.40 L1024.43,783.40 Z  '/></g>
 	<g id="gnuplot_plot_1d"  fill="none"><title>gnuplot_plot_1d</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb( 35, 105, 168)'  d='M695.36,512.28 L695.36,508.80 M690.86,512.28 L699.86,512.28 M690.86,508.80 L699.86,508.80 M809.52,547.87 L809.52,543.45
@@ -991,13 +1030,17 @@
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M695.36,557.22 L809.52,557.22 L923.68,557.22 L1037.83,557.22 L1151.99,557.22  '/></g>
 	</g>
+	<g id="gnuplot_plot_5d"  fill="none"><title>gnuplot_plot_5d</title>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(102, 102, 102)' stroke-dasharray=' 8,4,2,4'  d='M695.36,642.58 L809.52,642.58 L923.68,642.58 L1037.83,642.58 L1151.99,642.58  '/></g>
+	</g>
 	<g stroke='none' shape-rendering='crispEdges'>
-		<polygon fill = '#FFFFFF' points = '1073.43,783.40 1166.43,783.40 1166.43,738.40 1073.43,738.40 '/>
+		<polygon fill = '#FFFFFF' points = '1024.43,783.40 1166.43,783.40 1166.43,723.40 1024.43,723.40 '/>
 	</g>
 <g fill="none" color="#FFFFFF" stroke="#FFFFFF" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='black'  d='M1073.43,783.40 L1073.43,738.40 L1166.43,738.40 L1166.43,783.40 L1073.43,783.40 Z  '/></g>
+	<path stroke='black'  d='M1024.43,783.40 L1024.43,723.40 L1166.43,723.40 L1166.43,783.40 L1024.43,783.40 Z  '/></g>
 	<g id="gnuplot_plot_1d"  fill="none"><title>gnuplot_plot_1d</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -1006,33 +1049,42 @@
 <g fill="none" color="#FFFFFF" stroke="rgb( 35, 105, 168)" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(1115.43,749.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(1115.43,734.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>Hybrid</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb( 35, 105, 168)'  d='M1122.43,745.90 L1159.43,745.90  '/>	<use xlink:href='#gpPt6' transform='translate(1140.93,745.90) scale(4.05)' color='rgb( 35, 105, 168)'/>
+	<path stroke='rgb( 35, 105, 168)'  d='M1122.43,730.90 L1159.43,730.90  '/>	<use xlink:href='#gpPt6' transform='translate(1140.93,730.90) scale(4.05)' color='rgb( 35, 105, 168)'/>
 </g>
 	</g>
 	<g id="gnuplot_plot_3d"  fill="none"><title>gnuplot_plot_3d</title>
 <g fill="none" color="#FFFFFF" stroke="rgb( 35, 105, 168)" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(1115.43,764.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(1115.43,749.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>DuckDB</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(180,  83,  32)' stroke-dasharray=' 5,8'  d='M1122.43,760.90 L1159.43,760.90  '/></g>
+	<path stroke='rgb(180,  83,  32)' stroke-dasharray=' 5,8'  d='M1122.43,745.90 L1159.43,745.90  '/></g>
 	</g>
 	<g id="gnuplot_plot_4d"  fill="none"><title>gnuplot_plot_4d</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g transform="translate(1115.43,779.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+	<g transform="translate(1115.43,764.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
 		<text>Remote</text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M1122.43,775.90 L1159.43,775.90  '/></g>
+	<path stroke='rgb( 51, 130, 105)' stroke-dasharray=' 2,4'  d='M1122.43,760.90 L1159.43,760.90  '/></g>
+	</g>
+	<g id="gnuplot_plot_5d"  fill="none"><title>gnuplot_plot_5d</title>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<g transform="translate(1115.43,779.15)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="10.00"  text-anchor="end">
+		<text>Unsorted read</text>
+	</g>
+</g>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(102, 102, 102)' stroke-dasharray=' 8,4,2,4'  d='M1122.43,775.90 L1159.43,775.90  '/></g>
 	</g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>

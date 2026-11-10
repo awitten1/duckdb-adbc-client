@@ -25,8 +25,10 @@ means unsorted `read_adbc` followed by DuckDB `ORDER BY`; `Remote` means
 ![Alpha sweep by sort key](./alpha_sweep.png)
 
 The blue line is the hybrid function; whiskers show the observed run range.
-Dashed lines are the median DuckDB and remote-sort baselines. Each panel has
-its own vertical scale. [Vector version](./alpha_sweep.svg).
+Horizontal lines are the median DuckDB, remote-sort, and unsorted ADBC scan
+baselines. The unsorted scan took 1.969 seconds and measures transfer without
+producing ordered output. Each panel has its own vertical scale.
+[Vector version](./alpha_sweep.svg).
 
 The 0.007-second difference between the two best `o_orderkey` alpha values
 is within the run-to-run spread; treat α=.5 and α=.75 as effectively tied.

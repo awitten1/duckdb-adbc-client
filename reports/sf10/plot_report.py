@@ -40,6 +40,7 @@ def metric(key, case, name):
 
 
 def write_data():
+    unsorted = statistics.median(times("read-wide", "read"))
     for key in ("orderkey", "orderdate", "totalprice", "clerk"):
         duckdb = statistics.median(times(key, "native"))
         remote = statistics.median(times(key, "read_sorted"))
@@ -49,6 +50,7 @@ def write_data():
             rows.append(
                 f"{alpha}\t{statistics.median(values):.6f}\t{min(values):.6f}"
                 f"\t{max(values):.6f}\t{duckdb:.6f}\t{remote:.6f}"
+                f"\t{unsorted:.6f}"
             )
         (ROOT / f"alpha_{key}.tsv").write_text("\n".join(rows) + "\n")
 
