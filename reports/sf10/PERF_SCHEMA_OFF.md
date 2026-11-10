@@ -79,6 +79,17 @@ dominated by storage reading and Arrow-to-DuckDB conversion, with output
 production and transfer on the critical path. These percentages describe
 CPU samples, not fractions of elapsed latency.
 
+The 0.674-second scan is **not** a measurement of network time alone. For
+the 1.935 GB response, ClickHouse recorded a median 0.193 seconds in
+`NetworkSendElapsedMicroseconds`. That counter covers server socket-send
+calls and overlaps other pipeline activity; it omits client receive and
+decoding. The Arrow output processor's 0.638 seconds includes format
+production as well as sending. For the full remote price sort, server
+socket-send elapsed was 0.221 seconds, versus 2.188 seconds in its single
+sorted merge. Narrowing the projection changes storage reads, encoding,
+transfer, decoding, and sorting together, so the width experiment cannot
+assign its entire saving to the network.
+
 Adding DuckDB's full price sort raised query time only from 0.674 to 1.046
 seconds. It used 3.184 client core-seconds; hot functions were string gather
 (11.2% of client samples), `memmove` (10.1%), and sort-key/radix operations.
