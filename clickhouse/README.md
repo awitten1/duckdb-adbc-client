@@ -1,5 +1,9 @@
 # Local ClickHouse
 
+For the current single-socket workstation, use the user-level
+[local experiment workflow](../scripts/local_experiments.md). The CloudLab
+bootstrap below is specific to the remote 40-thread, two-NUMA-node host.
+
 ## Bootstrap an Ubuntu experiment host
 
 [`scripts/setup_ubuntu_experiments.sh`](../scripts/setup_ubuntu_experiments.sh)

@@ -376,6 +376,9 @@ D SET adbc_materialize_insert_rows = true;
 
 ## Tuning
 
+The local SF5 and SF10 partial-sort measurements, including SF10 charts, are
+available in the [experiment reports](./reports/README.md).
+
 To learn more about the internal design of the ADBC extension for tuning, you can read [DESIGN.md](./DESIGN.md).
 
 ### Connection Pool Size

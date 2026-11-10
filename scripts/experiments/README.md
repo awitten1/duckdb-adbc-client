@@ -1,5 +1,12 @@
 # Sort and transport experiments
 
+For development on the current workstation, follow the smaller
+[local experiment workflow](../local_experiments.md). The commands below
+target the CloudLab resource slices and SF25 dataset.
+
+The measured local SF5 and SF10 results are in the tracked
+[experiment reports](../../reports/README.md).
+
 These runners preserve the SF25 and transport experiments previously saved under
 ignored `build/` directories. Run them from the repository root. Keep outputs
 under `build/experiments/` (ignored by Git), or outside the checkout. Use a fresh
@@ -62,7 +69,9 @@ bash scripts/run_duckdb_cgroup.sh python3 scripts/experiments/run_cases.py \
 | Case | Meaning |
 |---|---|
 | `partial0` | All sorting in DuckDB through the table function |
+| `partial0.25` | Upper quarter of the integer key range sorted remotely |
 | `partial0.5` | Hybrid sort with half the integer key range assigned remotely |
+| `partial0.75` | Upper three quarters of the integer key range sorted remotely |
 | `partial1` | All sorting remotely through the table function |
 | `native` | Historical label for a DuckDB `ORDER BY` over unsorted `read_adbc` output; **not** ClickHouse's Native protocol |
 | `read_sorted` | `read_adbc` with the complete remote `ORDER BY` |
@@ -70,13 +79,16 @@ bash scripts/run_duckdb_cgroup.sh python3 scripts/experiments/run_cases.py \
 
 One invocation measures each listed case once. It writes the exact SQL,
 `EXPLAIN (ANALYZE, FORMAT JSON)` output, timing/resource summaries, stderr, and
-server query logs. All rows are consumed. The CLI wall timer includes startup,
-binding, cleanup, and up to 0.5 seconds of sampling delay. Stage timers can
+server query logs when server metrics are enabled. All rows are consumed. The CLI
+wall timer includes startup, binding, and cleanup; server sampling can add up to
+0.5 seconds of delay. Stage timers can
 overlap; do not sum all profiler fields to estimate wall time.
 
 Use `--dry-run` to write/print SQL without loading a driver or contacting a
-server. `--database`, `--expected-rows`, `--projection`, `--memory-limit`,
-`--duckdb`, and `--extension` allow controlled variations. `--expected-rows` checks
+server. `--database`, `--expected-rows`, `--projection`, `--partition-key`,
+`--sort-columns`, `--memory-limit`, `--duckdb`, and `--extension` allow controlled variations.
+The default sort column is `o_orderdate`; `--sort-columns` accepts one or more
+exact source column names. `--expected-rows` checks
 the profile's intermediate row count and must match the source data.
 
 For the repeated original/optimized comparison:

@@ -10,7 +10,8 @@ import subprocess
 import time
 
 REPO = Path(__file__).resolve().parents[2]
-CASES = ("partial0", "partial0.5", "partial1", "native", "read", "read_sorted")
+CASES = ("partial0", "partial0.25", "partial0.5", "partial0.75", "partial1", "native", "read", "read_sorted")
+DEFAULT_CASES = ("partial0", "partial0.5", "partial1", "native", "read", "read_sorted")
 
 
 def quote(value):
@@ -39,20 +40,22 @@ def operators(node):
 
 def query(args, case):
     source = identifier(args.database) + '."orders"'
+    ordering = ", ".join(identifier(column) + " ASC NULLS LAST" for column in args.sort_columns)
+    sort_columns = "[" + ", ".join(quote(column) for column in args.sort_columns) + "]"
     if case.startswith("partial"):
         return (
             f"SELECT {args.projection} FROM read_adbc_partial_sort("
             f"{quote(args.profile)}, {quote(args.database)}, 'orders', "
-            "partition_key:='o_orderkey', sort_columns:=['o_orderdate'], "
+            f"partition_key:={quote(args.partition_key)}, sort_columns:={sort_columns}, "
             f"pushdown_ratio:={case[7:]})"
         )
     remote = f"SELECT {args.projection} FROM {source}"
     if case == "read_sorted":
-        remote += " ORDER BY o_orderdate ASC NULLS LAST"
+        remote += " ORDER BY " + ordering
     sql = f"SELECT {args.projection} FROM read_adbc({quote(args.profile)}, {quote(remote)})"
     # Historical label: native means a DuckDB ORDER BY, not ClickHouse Native TCP.
     if case == "native":
-        sql += " ORDER BY o_orderdate ASC NULLS LAST"
+        sql += " ORDER BY " + ordering
     return sql
 
 
@@ -77,6 +80,8 @@ def main():
     )
     parser.add_argument("--profile", default="profile://myclickhouse")
     parser.add_argument("--database", default="tpch_sf25")
+    parser.add_argument("--partition-key", default="o_orderkey")
+    parser.add_argument("--sort-columns", nargs="+", default=["o_orderdate"])
     parser.add_argument("--tag", default="current")
     parser.add_argument("--threads", type=int, default=16)
     parser.add_argument("--memory-limit", default="56GiB")
@@ -84,7 +89,7 @@ def main():
     parser.add_argument(
         "--projection", default="*", help="SQL projection, e.g. o_orderkey,o_orderdate"
     )
-    parser.add_argument("--cases", nargs="+", choices=CASES, default=list(CASES))
+    parser.add_argument("--cases", nargs="+", choices=CASES, default=list(DEFAULT_CASES))
     parser.add_argument("--server-service", default="adbc-clickhouse.service")
     parser.add_argument("--server-pid", type=int)
     parser.add_argument(
@@ -102,6 +107,7 @@ def main():
         args.threads < 1
         or args.expected_rows < 0
         or (args.server_pid is not None and args.server_pid < 1)
+        or not args.sort_columns
     ):
         parser.error(
             "threads/server PID must be positive; expected rows must be nonnegative"
@@ -168,8 +174,10 @@ def main():
             try:
                 process.stdin.write(statements)
                 process.stdin.close()
-                while process.poll() is None:
-                    if not args.no_server_metrics:
+                if args.no_server_metrics:
+                    process.wait()
+                else:
+                    while process.poll() is None:
                         status = Path(f"/proc/{process.pid}/status")
                         try:
                             fields = dict(
@@ -196,7 +204,7 @@ def main():
                             )
                         except FileNotFoundError:
                             pass
-                    time.sleep(0.5)
+                        time.sleep(0.5)
             finally:
                 if process.poll() is None:
                     process.terminate()
@@ -212,6 +220,8 @@ def main():
             "extension": str(args.extension.resolve()),
             "profile": args.profile,
             "database": args.database,
+            "partition_key": args.partition_key,
+            "sort_columns": args.sort_columns,
             "memory_limit": args.memory_limit,
             "expected_rows": args.expected_rows,
             "user_seconds": usage.ru_utime - prior.ru_utime,
