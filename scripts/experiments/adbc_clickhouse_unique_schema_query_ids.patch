@@ -1,0 +1,25 @@
+--- a/src/statement.rs
++++ b/src/statement.rs
+@@ -290,13 +290,20 @@
+         }
+ 
+         let _guard = self.tokio.enter();
+-        let mut query = self.client.query_raw(&format!("DESCRIBE ({sql})"));
++        // This statement's query ID is reused for its eventual data query. Give
++        // each metadata request its own ID so ClickHouse does not reject a fast
++        // follow-up request while the previous query is still being cleaned up.
++        let mut schema_client = Client::clone(&self.client);
++        schema_client.set_setting(options::as_setting::QUERY_ID, random_id("schema"));
++        let mut settings_client = schema_client.clone();
++        settings_client.set_setting(options::as_setting::QUERY_ID, random_id("schema_settings"));
++        let mut query = schema_client.query_raw(&format!("DESCRIBE ({sql})"));
+ 
+         if let Some(BindType::Single(batch)) = &self.bind {
+             query = bind_record_batch(query, batch.clone())?;
+         }
+ 
+-        self.tokio.block_on(schema::of_query(&self.client, query))
++        self.tokio.block_on(schema::of_query(&settings_client, query))
+     }
+ 
+     /// # Not Implemented

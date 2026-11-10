@@ -1,6 +1,6 @@
 # Local workstation experiments
 
-Measured SF5 and SF10 results, including charts, are in the tracked
+Measured SF5, SF10, and SF50 results, including charts, are in the tracked
 [experiment reports](../reports/README.md).
 
 Use this workflow on the current single-socket workstation. It does not use
@@ -41,6 +41,19 @@ installation can supply that driver with `dbc install 'clickhouse=0.1.1'`.
 It writes an ADBC profile for `127.0.0.1:8123` and a local ClickHouse XML
 config with the planned server memory cap. Re-run `prepare` if available CPUs
 or memory change substantially.
+
+For larger scale factors, override either memory cap at preparation time:
+
+```bash
+LOCAL_CLICKHOUSE_MEMORY_GIB=26 LOCAL_DUCKDB_MEMORY_GIB=20 \
+  python3 scripts/local_experiments.py prepare
+```
+
+Overrides are saved in the ignored local config and retained by later
+`prepare` runs. The helper requires at least 4 GiB of available host memory
+after both caps. Restart the local ClickHouse server after changing its cap;
+the XML setting is read when the server starts. The SF50 `orders` measurements
+used a 26 GiB ClickHouse cap and compared 9 GiB and 20 GiB DuckDB limits.
 
 To use a specific connector build, set `ADBC_EXPERIMENT_DRIVER` to the
 absolute path of its shared library when running `prepare`:

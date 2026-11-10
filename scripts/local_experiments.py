@@ -109,6 +109,19 @@ def prepare():
     previous = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
     driver = os.environ.get("ADBC_EXPERIMENT_DRIVER") or previous.get("adbc_driver", "clickhouse")
     config = {**plan(), **paths(), "adbc_driver": driver}
+    overrides = dict(previous.get("memory_overrides_gib", {}))
+    for engine in ("clickhouse", "duckdb"):
+        raw = os.environ.get(f"LOCAL_{engine.upper()}_MEMORY_GIB")
+        if raw is not None:
+            value = int(raw)
+            if value < 2:
+                raise ValueError(f"{engine} memory limit must be at least 2 GiB")
+            overrides[engine] = value
+        if engine in overrides:
+            config[f"{engine}_memory_gib"] = overrides[engine]
+    if config["clickhouse_memory_gib"] + config["duckdb_memory_gib"] > config["available_memory_gib"] - 4:
+        raise ValueError("Memory limits must leave at least 4 GiB available for the host")
+    config["memory_overrides_gib"] = overrides
     require_files(config)
     if Path(config["extension"]).stat().st_mtime < (REPO / "src/adbc_partial_sort.cpp").stat().st_mtime:
         print("Warning: the ADBC binary predates the sort source; run build_local_experiments.sh.", file=sys.stderr)
