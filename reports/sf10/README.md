@@ -82,12 +82,52 @@ DuckDB sorting for decimal total price. The `o_clerk` DuckDB baseline ran
 alpha=.75 runs were 2.326, 2.387, and 2.289 seconds, so the advantage
 persists across all three runs.
 
+## Curl output-format comparison
+
+The same SF10 table was queried with `SELECT * FROM tpch_sf10.orders ORDER BY
+o_orderdate ASC NULLS LAST` over ClickHouse HTTP using curl. The HTTP
+`default_format` parameter selected `Native` or `ArrowStream`; each transfer
+sent all 15 million sorted rows to `/dev/null`. Both HTTP and Arrow IPC
+compression were disabled. ClickHouse
+used four physical cores and `max_threads=4`; curl used the other four cores.
+Each format had one warmup and three measured runs in each of two passes, with
+case order reversed in the second pass. Values below are medians of the six
+measured runs; ranges show the observed minimum and maximum.
+
+| HTTP format | Curl wall time (s) | Server CPU (core-s) | HTTP bytes sent (GB) | Output processor elapsed (s) |
+|---|---:|---:|---:|---:|
+| Native | **1.060** (1.025–1.143) | 4.019 | 2.023 | 0.245 |
+| ArrowStream | 1.238 (1.215–1.281) | 4.448 | **1.934** | 0.586 |
+
+![SF10 curl Native and ArrowStream format comparison](./curl_formats.png)
+
+[Vector version](./curl_formats.svg). The output-processor elapsed timer can
+include downstream waits and overlaps other stages; it is not an isolated
+encoding CPU measurement. The server reported 15 million result rows in every
+case. Curl's downloaded byte counts matched the approximately 2.023/1.934 GB
+server send counts, apart from small HTTP accounting differences.
+
+Native was about 0.178 seconds faster at the median despite sending about
+90 MB more. ArrowStream used about 0.43 more core-seconds of server CPU,
+and its output-format processor showed substantially more elapsed time. This
+points to Arrow output conversion/serialization as a contributor to the
+ArrowStream slowdown. Both queries also read about 1.648 GB from the table
+and sorted all rows; transfer alone does not explain total time. Median server
+network-send elapsed time was about 0.15–0.16 seconds in both formats. These
+measurements do not show that the ADBC client's Arrow decoding has the same
+cost: curl discards the output and never decodes it. Likewise, the curl wall
+times and `EXPLAIN ANALYZE` times above have different client work and should
+not be compared as equivalent query latencies. Here Native names ClickHouse's
+HTTP binary output format, not the report's historical `native` DuckDB-sort
+case label or the ClickHouse TCP protocol.
+
 ## Evidence and limits
 
 The [runner](./run_all.py) executed the matrix sequentially. The charts can be
 regenerated from the tracked TSV chart data with [plot_report.py](./plot_report.py)
 and Gnuplot. Pass `--refresh-data` to update the TSV files from local raw
-profiles. Ignored `build/local-experiments/sf10-sweep/` contains 78 successful
+profiles and curl results. Ignored `build/local-experiments/sf10-sweep/`
+contains 78 successful
 `*-summary.json` files with query/stage metrics, DuckDB profiles, SQL, stderr,
 and run logs.
 Every profile reported 15 million rows and zero temporary-directory spill.
@@ -96,5 +136,14 @@ repository's `build/tpch-sf10/` and `clickhouse/clickhouse-data/` directories.
 
 This is a shared workstation with CPU affinity, not exclusive CPU partitions.
 Most cases have two repeats. ClickHouse query logs and CPU profiles were not
-collected, so the remote read/buffer timer combines server sorting, Arrow
-encoding, transfer, and conversion.
+collected for the ADBC sweep, so the remote read/buffer timer combines server
+sorting, Arrow encoding, transfer, and conversion. The curl comparison did
+collect ClickHouse query and processor logs, but no `perf` samples. Its raw
+records are under ignored `build/local-experiments/sf10-curl-formats-20261109/`
+and `build/local-experiments/sf10-curl-formats-reverse-20261109/`; the compact
+chart data is tracked in [curl_formats.tsv](./curl_formats.tsv). To reproduce
+the transfers, use [record_queries.py](../../scripts/experiments/record_queries.py)
+with `--no-perf --repeats 3 --cases http_native http_arrow` and then reverse
+the case order for a second pass. Set `--sql-file` to the query above,
+`--threads 4 --expected-rows 15000000 --min-network-bytes 500000000`, and
+point `--clickhouse-client` to a local ClickHouse client executable or wrapper.
