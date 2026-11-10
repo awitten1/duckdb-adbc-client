@@ -82,6 +82,42 @@ DuckDB sorting for decimal total price. The `o_clerk` DuckDB baseline ran
 alpha=.75 runs were 2.326, 2.387, and 2.289 seconds, so the advantage
 persists across all three runs.
 
+## Recheck: sorting by `o_totalprice`
+
+Three new passes alternated the full-row DuckDB and ClickHouse sort cases,
+with the same 15-million-row table, four physical cores per engine, four
+DuckDB threads, and 9 GiB DuckDB memory limit. Both paths returned all rows;
+neither DuckDB path spilled. The original result persists:
+
+| Full-row path | Original two-run median (s) | New runs (s) | New median (s) |
+|---|---:|---:|---:|
+| DuckDB `ORDER BY` over unsorted ADBC | 2.333 | 2.467, 2.366, 2.359 | **2.366** |
+| ClickHouse `ORDER BY` through ADBC | 3.627 | 3.532, 3.723, 3.564 | 3.564 |
+
+The ClickHouse table is physically ordered by `o_orderkey`, so sorting by
+`o_totalprice` requires a full sort. Its server query took a median 3.112
+seconds and 10.762 core-seconds, versus 1.960 seconds and 3.024 core-seconds
+for the unsorted query feeding DuckDB. The ClickHouse query log reported
+roughly 2.1 seconds in `MergingSortedMilliseconds` and 2.34 GB peak query
+memory for the remote sort. The corresponding unsorted ADBC query plus DuckDB
+sort completed in 2.366 seconds; the standalone unsorted ADBC scan baseline
+was 1.969 seconds. The local sort adds much less wall time on top of the
+transfer than ClickHouse's sort adds to its server query. Pipeline stages
+overlap, so those differences are not isolated sort timings.
+
+ClickHouse's automatic `max_threads` value was 24 on this host, but forcing
+`max_threads=4` or `8` in the remote SQL did not close the gap: three runs
+with each limit remained around 3.5–3.8 seconds. Direct curl ArrowStream
+controls help separate transport cost: the sorted query took 2.119 seconds
+without HTTP compression and 2.975 seconds with LZ4 HTTP compression; the
+unsorted query took 0.609 and 1.873 seconds under the same two settings.
+The ADBC remote query sent 0.879 GB over HTTP, matching the LZ4 curl
+control's wire size, so it appears to use the compressed transfer path.
+Compression costs time in both sorted and unsorted transfers; it does not by
+itself explain why the remote sort loses to the local sort. Curl discards
+Arrow data, whereas ADBC decodes it into DuckDB, which also limits direct
+timing comparisons between these clients.
+
 ## Curl output-format comparison
 
 The same SF10 table was queried with `SELECT * FROM tpch_sf10.orders ORDER BY
@@ -147,3 +183,7 @@ with `--no-perf --repeats 3 --cases http_native http_arrow` and then reverse
 the case order for a second pass. Set `--sql-file` to the query above,
 `--threads 4 --expected-rows 15000000 --min-network-bytes 500000000`, and
 point `--clickhouse-client` to a local ClickHouse client executable or wrapper.
+The `o_totalprice` recheck profiles and server logs are under ignored
+`build/local-experiments/sf10-totalprice-verify-20261109/`; related curl
+controls are under `build/local-experiments/sf10-totalprice-curl-*` and
+`build/local-experiments/sf10-unsorted-curl-arrow-20261109/`.
