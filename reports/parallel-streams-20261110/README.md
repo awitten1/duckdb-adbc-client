@@ -32,6 +32,35 @@ from launching all N DuckDB processes until the last one finishes.
 
 Minimum and maximum times are in [streams_runtime.tsv](./streams_runtime.tsv).
 
+## Speedup over one stream
+
+![Speedup over one stream](./streams_speedup.png)
+
+[Vector version](./streams_speedup.svg). Each server's line is its own
+single-stream median divided by its median at N streams, so both start at
+1.0×. The dashed line is ideal scaling (N streams, N× faster).
+
+| Streams | 26.9.12.8 | 26.11.1.1 + Arrow change |
+|---:|---:|---:|
+| 1 | 1.00× | 1.00× |
+| 2 | 1.79× | **1.89×** |
+| 3 | 2.44× | **2.62×** |
+| 4 | 3.02× | **3.23×** |
+| 5 | **3.57×** | 3.27× |
+| 6 | **3.82×** | 3.28× |
+| 7 | **3.90×** | 3.31× |
+| 8 | **3.93×** | 3.28× |
+| 9 | **3.92×** | 3.30× |
+| 10 | **3.93×** | 3.27× |
+
+- **Up to 4 streams, the modified server scales closer to ideal**
+  (3.23× vs 3.02× at 4 streams).
+- **After that, it stops at about 3.3×,** while 26.9 keeps climbing to about
+  3.9× by 7 streams.
+- **A higher relative speedup is not a faster scan.** 26.9 gains more from
+  parallelism only because its single stream is slower (15.60 s vs 11.14 s);
+  its floor (3.97 s) is still above the modified server's (3.40 s).
+
 ## Findings
 
 - **The modified server is faster at every stream count.** A single stream
@@ -117,7 +146,8 @@ CH_MAX_THREADS=split bash scripts/run_duckdb_cgroup.sh ./run.sh 1 2 3 4 5 6 7 8 
 
 It prints medians and writes per-stream results to `build/experiments/`. The raw
 results for this report are [packaged.tsv](./packaged.tsv) and
-[modified.tsv](./modified.tsv). The chart and table come from
+[modified.tsv](./modified.tsv). Both charts and
+[streams_runtime.tsv](./streams_runtime.tsv) come from
 [plot_streams.py](./plot_streams.py) (`python3 plot_streams.py packaged.tsv
 modified.tsv .`; needs matplotlib). [start_modified_clickhouse.sh](./start_modified_clickhouse.sh)
 swaps the host to the modified server on a separate data directory, and back
