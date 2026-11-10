@@ -1,0 +1,282 @@
+4e289c2 serialize schema requests and retry SESSION_IS_LOCKED
+40b8286 declare ClickHouse Decimal32/64 as Arrow decimal128
+fa56003 map Date per output_format_arrow_date_as_uint16
+67632f3 unique query IDs for schema requests
+0f7308a implement ExecuteSchema with DESCRIBE (query)
+bdf5ab0 no HTTP response compression
+diff --git a/src/lib.rs b/src/lib.rs
+index 26b5bed..160f304 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -101,7 +101,7 @@ use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionDatabase
+ use adbc_core::{Connection, Database, Driver, Optionable, schemas};
+ use arrow_array::{RecordBatchIterator, RecordBatchReader, record_batch};
+ use arrow_schema::Schema;
+-use clickhouse::Client;
++use clickhouse::{Client, Compression};
+ use rand::distr::{Alphanumeric, SampleString};
+ use std::collections::{HashMap, HashSet};
+ use std::ops::Deref;
+@@ -384,7 +384,8 @@ impl Database for ClickhouseDatabase {
+             // Default `product_info` that should always be included
+             // Note: we don't apply `self.product_info` at this level in case it's set
+             // to a different value at a lower level; `AugmentedClient` covers that.
+-            .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"));
++            .with_product_info("adbc_clickhouse", env!("CARGO_PKG_VERSION"))
++            .with_compression(Compression::None);
+ 
+         if let Some(url) = &self.url {
+             client = client.with_url(url.to_string());
+diff --git a/src/schema.rs b/src/schema.rs
+index 4495371..36a1fc8 100644
+--- a/src/schema.rs
++++ b/src/schema.rs
+@@ -1,6 +1,7 @@
+ use adbc_core::error::{Error, Status};
+ use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+ use clickhouse::Client;
++use clickhouse::query::Query;
+ use clickhouse_types::DataTypeNode;
+ use clickhouse_types::data_types::{DateTimePrecision, DecimalType, EnumType};
+ use serde::{Deserialize, Deserializer};
+@@ -38,6 +39,10 @@ struct Settings {
+     /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_use_64_bit_indexes_for_dictionary>
+     #[serde(deserialize_with = "deserialize_bool_setting")]
+     use_64_bit_indexes_for_dictionary: bool,
++    /// <https://clickhouse.com/docs/operations/settings/formats#output_format_arrow_date_as_uint16>
++    /// Added in ClickHouse 26.2 (default `0`); older servers always write Date as UInt16.
++    #[serde(deserialize_with = "deserialize_bool_setting_default_true")]
++    date_as_uint16: bool,
+ }
+ 
+ impl Default for Settings {
+@@ -56,6 +61,7 @@ impl Default for Settings {
+             low_cardinality_as_dictionary: false,
+             use_signed_indexes_for_dictionary: false,
+             use_64_bit_indexes_for_dictionary: false,
++            date_as_uint16: true,
+         }
+     }
+ }
+@@ -70,6 +76,7 @@ impl Settings {
+             "low_cardinality_as_dictionary",
+             "use_signed_indexes_for_dictionary",
+             "use_64_bit_indexes_for_dictionary",
++            "date_as_uint16",
+         ];
+ 
+         let mut sql = "SELECT ".to_string();
+@@ -166,6 +173,43 @@ pub async fn of_table(
+     Ok(Schema::new(fields))
+ }
+ 
++/// Describe the result columns of a query prepared as `DESCRIBE (<query>)`.
++pub async fn of_query(client: &Client, query: Query) -> adbc_core::error::Result<Schema> {
++    let mut cursor = query.fetch::<Column>().map_err(|e| {
++        Error::with_message_and_status(
++            format!("error beginning fetch of query schema: {e}"),
++            Status::Internal,
++        )
++    })?;
++
++    let mut columns = Vec::new();
++    while let Some(column) = cursor.next().await.map_err(|e| {
++        Error::with_message_and_status(
++            format!("error retrieving query schema: {e}"),
++            Status::Internal,
++        )
++    })? {
++        columns.push(column);
++    }
++    drop(cursor);
++
++    // Both requests carry the connection's session ID, and ClickHouse rejects a
++    // request that overlaps another on the same session, so finish DESCRIBE first.
++    let settings = Settings::query(client).await?;
++
++    let mut fields = Vec::with_capacity(columns.len());
++    for column in &columns {
++        let field = column_to_arrow(column, &settings).map_err(|e| Error {
++            message: format!("error mapping query column {:?}: {}", column.name, e.message),
++            ..e
++        })?;
++
++        fields.push(field);
++    }
++
++    Ok(Schema::new(fields))
++}
++
+ fn column_to_arrow(column: &Column, settings: &Settings) -> Result<Field> {
+     let ch_type = DataTypeNode::new(&column.r#type).map_err(|e| {
+         Error::with_message_and_status(
+@@ -240,7 +284,8 @@ fn ch_type_to_arrow(
+         // a canonical extension type in Arrow: https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid
+         // DataTypeNode::UUID => {}
+         // https://github.com/ClickHouse/ClickHouse/blob/3196ab525aa6f1fef8d367db7610b765f7737f01/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L86
+-        DataTypeNode::Date => Ok(DataType::UInt16),
++        DataTypeNode::Date if settings.date_as_uint16 => Ok(DataType::UInt16),
++        DataTypeNode::Date => Ok(DataType::Date32),
+         DataTypeNode::Date32 => Ok(DataType::Date32),
+         // https://github.com/ClickHouse/ClickHouse/blob/3196ab525aa6f1fef8d367db7610b765f7737f01/src/Processors/Formats/Impl/CHColumnToArrowColumn.cpp#L87C1-L87C114
+         DataTypeNode::DateTime(_) => Ok(DataType::UInt32),
+@@ -315,9 +360,11 @@ fn arrow_decimal(scale: &u8, precision: &u8, kind: &DecimalType) -> Result<DataT
+     })?;
+ 
+     match kind {
+-        DecimalType::Decimal32 => Ok(DataType::Decimal32(*scale, precision)),
+-        DecimalType::Decimal64 => Ok(DataType::Decimal64(*scale, precision)),
+-        DecimalType::Decimal128 => Ok(DataType::Decimal128(*scale, precision)),
++        // ClickHouse writes Decimal32/64/128 columns as Arrow decimal128, so the
++        // declared schema must match the stream rather than the storage width.
++        DecimalType::Decimal32 | DecimalType::Decimal64 | DecimalType::Decimal128 => {
++            Ok(DataType::Decimal128(*scale, precision))
++        }
+         DecimalType::Decimal256 => Ok(DataType::Decimal256(*scale, precision)),
+     }
+ }
+@@ -444,3 +491,18 @@ where
+         _ => Err(Error::custom(format!("expected \"0\" or \"1\", got {s:?}"))),
+     }
+ }
++
++/// Like [`deserialize_bool_setting`], but a missing setting (older server) means `true`.
++fn deserialize_bool_setting_default_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
++where
++    D: Deserializer<'de>,
++{
++    use serde::de::Error;
++
++    match Option::<String>::deserialize(deserializer)?.as_deref() {
++        None => Ok(true),
++        Some("0") => Ok(false),
++        Some("1") => Ok(true),
++        Some(s) => Err(Error::custom(format!("expected \"0\" or \"1\", got {s:?}"))),
++    }
++}
+diff --git a/src/statement.rs b/src/statement.rs
+index ef4bf2b..54035b0 100644
+--- a/src/statement.rs
++++ b/src/statement.rs
+@@ -23,7 +23,7 @@ use clickhouse::query::Query;
+ 
+ use crate::options::OptionValueExt;
+ use crate::writer::ArrowStreamWriter;
+-use crate::{AugmentedClient, Result, TokioContext, options, random_id};
++use crate::{AugmentedClient, Result, TokioContext, options, random_id, schema};
+ use clickhouse::_priv::sql_escape_identifier;
+ use clickhouse_ext_arrow::ArrowQueryExt;
+ 
+@@ -31,6 +31,21 @@ use clickhouse_ext_arrow::ArrowQueryExt;
+ use adbc_core::options::IngestMode;
+ use uuid::Uuid;
+ 
++/// ClickHouse serializes HTTP requests within a session and rejects one that arrives
++/// while another holds the session (`SESSION_IS_LOCKED`, code 373). This includes a
++/// follow-up sent just after the previous response, before the server releases the
++/// session. Retry such requests briefly when nothing has been returned to the caller.
++const SESSION_RETRY_LIMIT: u32 = 30;
++
++fn session_locked(message: &str) -> bool {
++    message.contains("SESSION_IS_LOCKED")
++}
++
++fn session_retry_delay(attempt: u32) -> std::time::Duration {
++    // 5, 10, 20, ... ms, capped at 200 ms: about five seconds in total.
++    std::time::Duration::from_millis((5u64 << attempt.min(6)).min(200))
++}
++
+ /// ClickHouse ADBC [`Statement`] implementation.
+ ///
+ /// This inherits the session ID of the parent [`ClickhouseConnection`][super::ClickhouseConnection].
+@@ -257,7 +272,44 @@ impl Statement for ClickhouseStatement {
+     /// See the tracking issue for details and subscribe for updates:
+     /// <https://github.com/ClickHouse/adbc_clickhouse/issues/16>
+     fn execute_schema(&mut self) -> adbc_core::error::Result<Schema> {
+-        err_unimplemented!("ClickhouseStatement::execute_schema()")
++        let StatementMode::SqlQuery(sql) = &self.mode else {
++            return Err(Error::with_message_and_status(
++                "execute_schema requires a SQL query",
++                Status::InvalidState,
++            ));
++        };
++        if is_streaming_insert(sql) {
++            return Err(Error::with_message_and_status(
++                "execute_schema requires a query that returns a result set",
++                Status::InvalidState,
++            ));
++        }
++
++        let _guard = self.tokio.enter();
++        let mut attempt = 0;
++        loop {
++            // This statement's query ID is reused for its eventual data query. Give
++            // each metadata request its own ID so ClickHouse does not reject a fast
++            // follow-up request while the previous query is still being cleaned up.
++            let mut schema_client = Client::clone(&self.client);
++            schema_client.set_setting(options::as_setting::QUERY_ID, random_id("schema"));
++            let mut settings_client = schema_client.clone();
++            settings_client
++                .set_setting(options::as_setting::QUERY_ID, random_id("schema_settings"));
++            let mut query = schema_client.query_raw(&format!("DESCRIBE ({sql})"));
++
++            if let Some(BindType::Single(batch)) = &self.bind {
++                query = bind_record_batch(query, batch.clone())?;
++            }
++
++            match self.tokio.block_on(schema::of_query(&settings_client, query)) {
++                Err(e) if attempt < SESSION_RETRY_LIMIT && session_locked(&e.message) => {
++                    std::thread::sleep(session_retry_delay(attempt));
++                    attempt += 1;
++                }
++                result => return result,
++            }
++        }
+     }
+ 
+     /// # Not Implemented
+@@ -955,18 +1007,34 @@ fn fetch_blocking(
+     // but that results in a larger generated future type
+     let _guard = tokio.enter();
+ 
+-    // Raw so a literal `?` is not treated as a bind placeholder;
+-    // parameters are bound server-side via `Query::param()`.
+-    let mut query = client.query_raw(sql);
+-    query = bind_query(query, bind)?;
++    // A streamed bind cannot be replayed, so only scalar or absent binds are retried.
++    let retryable = !matches!(bind, Some(BindType::Stream(_)));
++    let mut bind = bind;
++    let mut attempt = 0;
++    loop {
++        let this_bind = match &bind {
++            Some(BindType::Single(batch)) => Some(BindType::Single(batch.clone())),
++            _ => bind.take(),
++        };
+ 
+-    let cursor = query.fetch_arrow().map_err(|e| {
+-        Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
+-    })?;
++        // Raw so a literal `?` is not treated as a bind placeholder;
++        // parameters are bound server-side via `Query::param()`.
++        let mut query = client.query_raw(sql);
++        query = bind_query(query, this_bind)?;
++
++        let cursor = query.fetch_arrow().map_err(|e| {
++            Error::with_message_and_status(format!("error executing query: {e}"), Status::Internal)
++        })?;
+ 
+-    tokio
+-        .block_on(ArrowStreamReader::begin(tokio.clone(), cursor))
+-        .map_err(Into::into)
++        // The session error arrives before any data, while reading the schema message.
++        match tokio.block_on(ArrowStreamReader::begin(tokio.clone(), cursor)) {
++            Err(e) if retryable && attempt < SESSION_RETRY_LIMIT && session_locked(&e.to_string()) => {
++                std::thread::sleep(session_retry_delay(attempt));
++                attempt += 1;
++            }
++            result => return result.map_err(Into::into),
++        }
++    }
+ }
+ 
+ fn execute_blocking(
