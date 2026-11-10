@@ -509,6 +509,15 @@ private:
 class PartialSortState : public GlobalTableFunctionState {
 public:
     using Clock = std::chrono::steady_clock;
+    struct ScopedTimer {
+        explicit ScopedTimer(double &seconds_p) : seconds(seconds_p), started(Clock::now()) {
+        }
+        ~ScopedTimer() {
+            seconds += std::chrono::duration<double>(Clock::now() - started).count();
+        }
+        double &seconds;
+        Clock::time_point started;
+    };
     PartialSortState(ClientContext &context_p, const PartialSortBindData &data_p, const vector<column_t> &columns)
         : context(context_p), data(data_p, columns), thread_context(context), local_keys(LogicalType::BLOB),
           remote_keys(LogicalType::BLOB),
@@ -619,9 +628,12 @@ public:
 
     unique_ptr<ColumnDataCollection> Pop() {
         std::unique_lock<std::mutex> lock(queue_mutex);
-        while (queue.empty() && !remote_done && !stopped) {
-            queue_cv.wait_for(lock, std::chrono::milliseconds(20));
-            context.InterruptCheck();
+        if (queue.empty() && !remote_done && !stopped) {
+            ScopedTimer wait(remote_queue_wait_seconds);
+            while (queue.empty() && !remote_done && !stopped) {
+                queue_cv.wait_for(lock, std::chrono::milliseconds(20));
+                context.InterruptCheck();
+            }
         }
         if (!worker_error.empty()) {
             throw IOException("ADBC partial sort remote branch: %s", worker_error);
@@ -856,6 +868,7 @@ public:
         if (local_pos < local_chunk.size()) {
             return true;
         }
+        ScopedTimer fetch(local_fetch_seconds);
         local_chunk.Reset();
         if (!sort || local_done) {
             return false;
@@ -886,6 +899,7 @@ public:
         if (remote_pos < remote_chunk.size()) {
             return true;
         }
+        ScopedTimer fetch(remote_fetch_seconds);
         remote_pos = 0;
         remote_chunk.Reset();
         while (!remote_segment || !remote_segment->Scan(remote_scan, remote_chunk)) {
@@ -971,7 +985,10 @@ public:
         merged_chunk.Reset();
         auto started = Clock::now();
         ScanInternal(merged_chunk);
-        data.Project(merged_chunk, output);
+        {
+            ScopedTimer project(project_seconds);
+            data.Project(merged_chunk, output);
+        }
         merge_seconds += std::chrono::duration<double>(Clock::now() - started).count();
     }
 
@@ -994,6 +1011,13 @@ public:
         }
         metrics.AddExtraInfo("Bounds Seconds", std::to_string(bounds_seconds));
         metrics.AddExtraInfo("Merge Seconds", std::to_string(merge_seconds));
+        metrics.AddExtraInfo("Merge Local Fetch Seconds", std::to_string(local_fetch_seconds));
+        metrics.AddExtraInfo("Merge Remote Fetch Seconds", std::to_string(remote_fetch_seconds));
+        metrics.AddExtraInfo("Merge Remote Queue Wait Seconds", std::to_string(remote_queue_wait_seconds));
+        metrics.AddExtraInfo("Merge Project Seconds", std::to_string(project_seconds));
+        metrics.AddExtraInfo("Merge Loop Seconds",
+                             std::to_string(MaxValue(0.0, merge_seconds - local_fetch_seconds - remote_fetch_seconds -
+                                                              project_seconds)));
         metrics.AddExtraInfo("Output Reference Rows", std::to_string(output_reference_rows));
         metrics.AddExtraInfo("Output Copied Rows", std::to_string(output_copied_rows));
         if (local_started != Clock::time_point()) {
@@ -1074,6 +1098,11 @@ private:
     double local_source_seconds = 0;
     // Output scan time after initialization, including serial source reads when applicable.
     double merge_seconds = 0;
+    // Output-thread time fetching new chunks, waiting for the remote producer, and projecting rows.
+    double local_fetch_seconds = 0;
+    double remote_fetch_seconds = 0;
+    double remote_queue_wait_seconds = 0;
+    double project_seconds = 0;
     // Rows emitted as references to ordered input spans.
     idx_t output_reference_rows = 0;
     // Rows copied into packed output chunks for short interleaved spans.
