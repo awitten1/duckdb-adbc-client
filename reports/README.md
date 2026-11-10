@@ -5,6 +5,7 @@
 - [SF10 profiling rerun and bottleneck charts](./sf10/PROFILING.md)
 - [SF10 perf profiles with schema-only connector and compression off](./sf10/PERF_SCHEMA_OFF.md)
 - [SF50 alpha, sort-key, memory, and bottleneck results with charts](./sf50/README.md)
+- [CloudLab rerun of the SF5, SF10, and SF50 reports, with alpha charts for every key](./cloudlab-repro-20261110/README.md)
 
 These reports and chart assets are tracked in Git. Raw DuckDB profiles,
 ClickHouse data, Parquet exports, and machine-specific logs remain under the
