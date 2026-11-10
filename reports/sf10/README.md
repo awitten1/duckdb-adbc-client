@@ -2,6 +2,8 @@
 
 For the three-run rerun with ClickHouse processor logs, schema-probe diagnosis,
 and output-thread merge timings, see [SF10 profiling](./PROFILING.md).
+For `perf` call stacks using the schema-only connector with compression off,
+see [the optimized-connector rerun](./PERF_SCHEMA_OFF.md).
 
 Measured on 2026-11-09 using the rebuilt DuckDB/ADBC binaries, local
 ClickHouse 26.10.1.1810, and TPC-H SF10 `orders` (15,000,000 rows). Each

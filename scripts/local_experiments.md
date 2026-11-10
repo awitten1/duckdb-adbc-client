@@ -42,6 +42,20 @@ It writes an ADBC profile for `127.0.0.1:8123` and a local ClickHouse XML
 config with the planned server memory cap. Re-run `prepare` if available CPUs
 or memory change substantially.
 
+To use a specific connector build, set `ADBC_EXPERIMENT_DRIVER` to the
+absolute path of its shared library when running `prepare`:
+
+```bash
+ADBC_EXPERIMENT_DRIVER=/absolute/path/to/libadbc_clickhouse.so \
+  python3 scripts/local_experiments.py prepare
+```
+
+The selection is stored in the ignored local config and retained by later
+`prepare` runs. Set `ADBC_EXPERIMENT_DRIVER=clickhouse` to return to driver
+discovery through `ADBC_DRIVER_PATH`. The SF10
+[perf rerun](../reports/sf10/PERF_SCHEMA_OFF.md) used this option for the
+schema-only, HTTP-compression-off connector.
+
 ## Start and check
 
 In one terminal, start ClickHouse in the foreground:

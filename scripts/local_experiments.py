@@ -87,25 +87,34 @@ def paths():
 
 
 def require_files(config):
-    for key in ("clickhouse_bin", "duckdb_bin", "extension", "driver_path"):
+    for key in ("clickhouse_bin", "duckdb_bin", "extension"):
         path = Path(config[key]) if config[key] else None
         if not path or not path.exists():
             raise RuntimeError(f"Missing {key}: {config[key] or '(not found)'}")
     for key in ("clickhouse_bin", "duckdb_bin"):
         if not os.access(config[key], os.X_OK):
             raise RuntimeError(f"Not executable: {config[key]}")
-    if not any(Path(config["driver_path"]).rglob("libadbc_driver_clickhouse.so")):
-        raise RuntimeError(f"ClickHouse ADBC driver not found under {config['driver_path']}")
+    if config["adbc_driver"] == "clickhouse":
+        driver_path = Path(config["driver_path"])
+        if not driver_path.is_dir() or not any(driver_path.rglob("libadbc_driver_clickhouse.so")):
+            raise RuntimeError(f"ClickHouse ADBC driver not found under {driver_path}")
+    else:
+        library = Path(config["adbc_driver"]).expanduser().resolve()
+        if not library.is_file():
+            raise RuntimeError(f"ClickHouse ADBC driver not found: {library}")
+        config["adbc_driver"] = str(library)
 
 
 def prepare():
-    config = {**plan(), **paths()}
+    previous = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+    driver = os.environ.get("ADBC_EXPERIMENT_DRIVER") or previous.get("adbc_driver", "clickhouse")
+    config = {**plan(), **paths(), "adbc_driver": driver}
     require_files(config)
     if Path(config["extension"]).stat().st_mtime < (REPO / "src/adbc_partial_sort.cpp").stat().st_mtime:
         print("Warning: the ADBC binary predates the sort source; run build_local_experiments.sh.", file=sys.stderr)
     WORK.mkdir(parents=True, exist_ok=True)
     (WORK / "clickhouse.toml").write_text(
-        'profile_version = 1\ndriver = "clickhouse"\n\n'
+        'profile_version = 1\ndriver = ' + json.dumps(config["adbc_driver"]) + '\n\n'
         '[Options]\nuri = "http://127.0.0.1:8123/"\n'
     )
     xml = ET.parse(REPO / "clickhouse/clickhouse-config.xml")
@@ -115,6 +124,7 @@ def prepare():
     xml.write(WORK / "clickhouse-config.xml", encoding="unicode", xml_declaration=True)
     CONFIG.write_text(json.dumps(config, indent=2) + "\n")
     print_plan(config)
+    print(f"ADBC driver: {config['adbc_driver']}")
     print(f"Prepared {CONFIG}")
     return config
 

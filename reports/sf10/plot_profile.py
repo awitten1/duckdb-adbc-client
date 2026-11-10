@@ -4,13 +4,16 @@
 import argparse
 import json
 from pathlib import Path
+import re
 import statistics
+import subprocess
 
 from plot_report import render
 
 
 ROOT = Path(__file__).resolve().parent
 RAW = ROOT.parents[1] / "build/local-experiments/sf10-deep-profile-20261109"
+SCHEMA_OFF_RAW = ROOT.parents[1] / "build/local-experiments/sf10-schema-perf-20261109"
 
 
 def median(values):
@@ -103,12 +106,69 @@ def write_data():
     (ROOT / "profile_hybrid.tsv").write_text("\n".join(hybrid_rows) + "\n")
 
 
+def write_schema_off_data():
+    def run_time(key, case):
+        return median(
+            json.loads((SCHEMA_OFF_RAW / f"{key}-r{repeat}-{case}-summary.json").read_text())["query"]["total_time"]
+            for repeat in (1, 2, 3)
+        )
+
+    rows = []
+    for case, label in (
+        ("read", "Unsorted scan"),
+        ("native", "DuckDB sort"),
+        ("read_sorted", "ClickHouse sort"),
+        ("partial0.5", "Hybrid alpha 0.5"),
+    ):
+        price = run_time("price", case)
+        date = price if case == "read" else run_time("date", case)
+        narrow = run_time("price-narrow", case)
+        rows.append(f'"{label}"\t{date:.3f}\t{price:.3f}\t{narrow:.3f}')
+    (ROOT / "perf_schema_off_times.tsv").write_text("\n".join(rows) + "\n")
+
+    def leaf_share(filename, pattern):
+        report = subprocess.run(
+            ["perf", "report", "--stdio", "--no-children", "--sort", "dso,symbol",
+             "--percent-limit", "0", "--call-graph", "none", "-i", str(SCHEMA_OFF_RAW / filename)],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        return sum(
+            float(match.group(1)) for line in report.splitlines()
+            if (match := re.match(r"\s*(\d+\.\d+)%\s+\S+\s+\[\.\]\s+(.*)", line))
+            and pattern in match.group(2)
+        )
+
+    for side, files, patterns in (
+        ("server", ("server-price-read_sorted.data", "server-price-repeat.data"), (
+            ("String insert", "DB::ColumnString::insertFrom"),
+            ("Decimal compare", "ColumnDecimal<DB::Decimal<long> >::compareAt"),
+            ("ZSTD table decode", "ZSTD_decompressSequences"),
+            ("Decimal greater-than", "DB::operator><long>"),
+        )),
+        ("client", ("client-symbolized-price-partial.data", "client-price-repeat.data"), (
+            ("memmove", "__memmove_avx512_unaligned_erms"),
+            ("String buffer copy", "duckdb::VectorStringBuffer::CopyInternal"),
+            ("Key memcmp", "__memcmp_evex_movbe"),
+            ("Arrow to DuckDB", "duckdb::ArrowToDuckDBConversion::ColumnArrowToDuckDB"),
+        )),
+    ):
+        rows = [
+            f'"{label}"\t{median(leaf_share(filename, pattern) for filename in files):.3f}'
+            for label, pattern in patterns
+        ]
+        (ROOT / f"perf_schema_off_{side}.tsv").write_text("\n".join(rows) + "\n")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--refresh-data", action="store_true")
     args = parser.parse_args()
     if args.refresh_data:
         write_data()
-    for stem in ("profile_scan", "profile_remote", "profile_hybrid"):
+        write_schema_off_data()
+    for stem in (
+        "profile_scan", "profile_remote", "profile_hybrid",
+        "perf_schema_off_times", "perf_schema_off_hotspots",
+    ):
         render(stem)
         print(f"Rendered {stem}.svg and {stem}.png")

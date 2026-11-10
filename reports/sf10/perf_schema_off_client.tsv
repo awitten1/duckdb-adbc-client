@@ -1,0 +1,4 @@
+"memmove"	17.240
+"String buffer copy"	13.515
+"Key memcmp"	10.445
+"Arrow to DuckDB"	5.265
