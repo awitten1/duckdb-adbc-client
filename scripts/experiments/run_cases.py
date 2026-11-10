@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Profile SF25 orders sorts through ADBC; optionally sample Linux process usage."""
+"""Profile TPC-H table sorts through ADBC (SF25 orders by default); optionally sample Linux process usage."""
 
 import argparse
 import json
@@ -39,13 +39,13 @@ def operators(node):
 
 
 def query(args, case):
-    source = identifier(args.database) + '."orders"'
+    source = identifier(args.database) + "." + identifier(args.table)
     ordering = ", ".join(identifier(column) + " ASC NULLS LAST" for column in args.sort_columns)
     sort_columns = "[" + ", ".join(quote(column) for column in args.sort_columns) + "]"
     if case.startswith("partial"):
         return (
             f"SELECT {args.projection} FROM read_adbc_partial_sort("
-            f"{quote(args.profile)}, {quote(args.database)}, 'orders', "
+            f"{quote(args.profile)}, {quote(args.database)}, {quote(args.table)}, "
             f"partition_key:={quote(args.partition_key)}, sort_columns:={sort_columns}, "
             f"pushdown_ratio:={case[7:]})"
         )
@@ -80,6 +80,7 @@ def main():
     )
     parser.add_argument("--profile", default="profile://myclickhouse")
     parser.add_argument("--database", default="tpch_sf25")
+    parser.add_argument("--table", default="orders")
     parser.add_argument("--partition-key", default="o_orderkey")
     parser.add_argument("--sort-columns", nargs="+", default=["o_orderdate"])
     parser.add_argument("--tag", default="current")
@@ -259,7 +260,7 @@ def main():
                 "SELECT query_id,query_start_time_microseconds,query_duration_ms,read_rows,read_bytes,"
                 "result_rows,result_bytes,memory_usage,ProfileEvents,query FROM system.query_log "
                 f"WHERE type='QueryFinish' AND query_start_time_microseconds>=fromUnixTimestamp64Micro({int(started_epoch * 1000000)}) "
-                "AND query LIKE '%orders%' AND query NOT LIKE '%system.query_log%' ORDER BY query_start_time_microseconds"
+                f"AND query LIKE {quote('%' + args.table + '%')} AND query NOT LIKE '%system.query_log%' ORDER BY query_start_time_microseconds"
             )
             logs = subprocess.run(
                 client + [log_sql], env=env, check=True, capture_output=True, text=True
