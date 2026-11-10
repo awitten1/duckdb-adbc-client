@@ -118,6 +118,46 @@ itself explain why the remote sort loses to the local sort. Curl discards
 Arrow data, whereas ADBC decodes it into DuckDB, which also limits direct
 timing comparisons between these clients.
 
+## ADBC transfer with compression off
+
+To measure the effect inside DuckDB, we built two isolated ClickHouse ADBC
+drivers from source commit `2c374ad` with
+`cargo build --release --features ffi`. The only functional difference was adding
+`.with_compression(Compression::None)` when the driver creates its ClickHouse
+HTTP client. The exact [patch](../../scripts/experiments/adbc_clickhouse_no_compression.patch)
+applies to that source commit. Each driver had its own profile pointing
+directly to its shared library; the installed driver and the DuckDB extension
+were unchanged. The LZ4 build reproduced the earlier SF10 timings. Three
+measured passes alternated driver and case order on the same four-core-per-engine
+setup.
+
+| Sort key | Query path | LZ4 response (s) | Compression off (s) |
+|---|---|---:|---:|
+| Either | Unsorted ADBC read | 1.985 | **0.694** |
+| `o_orderdate` | DuckDB sort | 2.176 | **0.978** |
+| `o_orderdate` | α=.5 hybrid | 1.944 | 1.447 |
+| `o_orderdate` | ClickHouse sort | 2.880 | 1.772 |
+| `o_totalprice` | DuckDB sort | 2.351 | **1.069** |
+| `o_totalprice` | α=.5 hybrid | 3.643 | 3.090 |
+| `o_totalprice` | ClickHouse sort | 3.637 | 3.052 |
+
+![ADBC compressed and uncompressed SF10 results](./adbc_compression.png)
+
+Times are median `EXPLAIN ANALYZE` query seconds. All runs produced 15
+million rows without DuckDB temporary-directory spill. The unsorted server
+transfer sent 0.895 GB with LZ4 and 1.935 GB without compression; the sorted
+price transfer sent 0.879 and 1.934 GB. Those wire counts confirm that the
+new build disabled response compression. [Vector version](./adbc_compression.svg).
+
+On this loopback connection, avoiding compression greatly reduced the scan
+floor. The fastest date strategy changed from α=.5 to a DuckDB full sort;
+the fastest price strategy remained DuckDB. The price hybrid still copied all
+15 million output rows and spent a median 1.81 seconds in its elapsed merge
+timer with compression off. ClickHouse's full price sort also remained
+expensive. Compression off therefore improves transfer but leaves those
+sort/merge costs. These results are specific to a same-host connection;
+greater network latency or lower bandwidth could change the tradeoff.
+
 ## Curl output-format comparison
 
 The same SF10 table was queried with `SELECT * FROM tpch_sf10.orders ORDER BY
@@ -187,3 +227,11 @@ The `o_totalprice` recheck profiles and server logs are under ignored
 `build/local-experiments/sf10-totalprice-verify-20261109/`; related curl
 controls are under `build/local-experiments/sf10-totalprice-curl-*` and
 `build/local-experiments/sf10-unsorted-curl-arrow-20261109/`.
+The ADBC compression comparison's profiles and server logs are under ignored
+`build/local-experiments/sf10-adbc-compression-20261109/`. Its isolated
+drivers, source snapshots, and profiles are under ignored
+`build/local-experiments/adbc-clickhouse-*` and
+`build/local-experiments/clickhouse-{lz4,nocompress}.toml`. The tracked
+[chart data](./compression_date.tsv) and
+[price chart data](./compression_price.tsv) can regenerate the chart without
+those raw files.

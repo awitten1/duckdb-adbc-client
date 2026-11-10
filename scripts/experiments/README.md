@@ -139,6 +139,12 @@ count (1 GB by default). For small fixtures, override `--expected-rows` and
 SETTINGS; the default is the full SF25 orders sort. Each case has one warmup
 unless `--no-warmup` is supplied. Cases run sequentially, grouped by format.
 
+For the SF10 ADBC client comparison with HTTP response compression disabled,
+see the [compression section](../../reports/sf10/README.md#adbc-transfer-with-compression-off)
+and the [driver patch](./adbc_clickhouse_no_compression.patch). The patch
+applies to ClickHouse ADBC driver source commit `2c374ad`; keep its build and
+profile separate from the installed driver.
+
 Capture server-only profiles separately from timing runs:
 
 ```bash

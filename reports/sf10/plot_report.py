@@ -14,6 +14,7 @@ TRANSPORT_RAW = (
     REPO / "build/local-experiments/sf10-curl-formats-20261109",
     REPO / "build/local-experiments/sf10-curl-formats-reverse-20261109",
 )
+COMPRESSION_RAW = REPO / "build/local-experiments/sf10-adbc-compression-20261109"
 
 
 def runs(key, case):
@@ -114,6 +115,34 @@ def write_transport_data():
     (ROOT / "curl_formats.tsv").write_text("\n".join(rows) + "\n")
 
 
+def write_compression_data():
+    for key in ("date", "price"):
+        rows = []
+        for label, case in (
+            ("Unsorted", "read"),
+            ("DuckDB sort", "native"),
+            ("Alpha 0.5", "partial0.5"),
+            ("Remote sort", "read_sorted"),
+        ):
+            times_by_kind = {}
+            for kind in ("lz4", "nocompress"):
+                source_key = "price" if case == "read" else key
+                times_by_kind[kind] = [
+                    json.loads(
+                        (
+                            COMPRESSION_RAW
+                            / f"{source_key}-{kind}-r{repeat}-{case}-summary.json"
+                        ).read_text()
+                    )["query"]["total_time"]
+                    for repeat in (1, 2, 3)
+                ]
+            rows.append(
+                f'"{label}"\t{statistics.median(times_by_kind["lz4"]):.6f}'
+                f'\t{statistics.median(times_by_kind["nocompress"]):.6f}'
+            )
+        (ROOT / f"compression_{key}.tsv").write_text("\n".join(rows) + "\n")
+
+
 def render(stem):
     source = (ROOT / f"{stem}.gp").read_text()
     subprocess.run(["gnuplot"], input=source, text=True, cwd=ROOT, check=True)
@@ -138,6 +167,7 @@ if __name__ == "__main__":
     if args.refresh_data:
         write_data()
         write_transport_data()
-    for chart in ("alpha_sweep", "merge_copy", "projection_width", "curl_formats"):
+        write_compression_data()
+    for chart in ("alpha_sweep", "merge_copy", "projection_width", "curl_formats", "adbc_compression"):
         render(chart)
         print(f"Rendered {chart}.svg and {chart}.png")
