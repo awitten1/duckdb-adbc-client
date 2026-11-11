@@ -1,0 +1,36 @@
+Output of scripts/parallel_arrow_correctness.sh (2026-11-11) against the prototype build a5be5f0c7.
+
+=== Byte comparison, serial vs parallel formatting (sha256 prefix, bytes)
+full-table-1-thread                serial 36156cd0c8923319 9673331584    parallel 36156cd0c8923319 9673331584    SAME
+ordered-500k-32-threads            serial 616868a5760563de 64515848      parallel 616868a5760563de 64515848      SAME
+empty-result                       serial 33edb5976503206c 512           parallel 33edb5976503206c 512           SAME
+limit-10                           serial 5cd502ef685837bf 2464          parallel 5cd502ef685837bf 2464          SAME
+low-cardinality-dictionary         serial 763cf3799710223a 6002960       parallel 763cf3799710223a 6002960       SAME
+combined-record-batches            serial 758b6daf5f7c635c 64481760      parallel 758b6daf5f7c635c 64481760      SAME
+
+=== Output processor used by each run (expect ParallelFormattingOutputFormat only for parallel runs without a fallback)
+    ┌─run─────────────────────────────────┬─output─────────────────────────┐
+ 1. │ full-table-1-thread-serial          │ ArrowIPCBlockOutputFormat      │
+ 2. │ full-table-1-thread-parallel        │ ParallelFormattingOutputFormat │
+ 3. │ ordered-500k-32-threads-serial      │ ArrowIPCBlockOutputFormat      │
+ 4. │ ordered-500k-32-threads-parallel    │ ParallelFormattingOutputFormat │
+ 5. │ empty-result-serial                 │ ArrowIPCBlockOutputFormat      │
+ 6. │ empty-result-parallel               │ ParallelFormattingOutputFormat │
+ 7. │ limit-10-serial                     │ ArrowIPCBlockOutputFormat      │
+ 8. │ limit-10-parallel                   │ ParallelFormattingOutputFormat │
+ 9. │ low-cardinality-dictionary-serial   │ ArrowIPCBlockOutputFormat      │
+10. │ low-cardinality-dictionary-parallel │ ArrowIPCBlockOutputFormat      │
+11. │ combined-record-batches-serial      │ ArrowIPCBlockOutputFormat      │
+12. │ combined-record-batches-parallel    │ ArrowIPCBlockOutputFormat      │
+    └─────────────────────────────────────┴────────────────────────────────┘
+
+=== read_adbc through the connector (arrow-rs decoding), DuckDB in its slice
+serial,75000000,691747052758391932685914880
+parallel,75000000,691747052758391932685914880
+read_adbc checksums: SAME
+
+=== An error in the middle of the stream must reach DuckDB with parallel formatting too
+parallel=0: error surfaced
+parallel=1: error surfaced
+
+ALL CHECKS PASSED

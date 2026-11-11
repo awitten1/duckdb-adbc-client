@@ -1,0 +1,5 @@
+run	first_block_wait_s	busy_not_sending_s	send_blocked_s	wall_s
+Serial, curl on ClickHouse's socket	0.47	3.31	3.49	7.30
+Parallel, curl on ClickHouse's socket	0.55	1.40	3.31	5.29
+Serial, curl on the other socket	0.54	3.35	5.90	9.82
+Parallel, curl on the other socket	0.48	1.33	5.67	7.54

@@ -1,0 +1,123 @@
+From a5be5f0c701e9da5a2eb6784f936f3f40f157199 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Format ArrowStream output in parallel
+
+Write the Arrow IPC schema as the output format prefix instead of with the
+first chunk, so that every record batch can be encoded by its own formatter
+instance, and register ArrowStream for parallel formatting. FormatFactory
+keeps it serial when record batches are combined or dictionaries are
+written, because both carry state from one chunk to the next.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Formats/FormatFactory.cpp                 | 15 ++++++++++++++-
+ .../ArrowIPC/ArrowIPCBlockOutputFormat.cpp    | 19 ++++++++++++++-----
+ .../Impl/ArrowIPC/ArrowIPCBlockOutputFormat.h |  6 ++++++
+ 3 files changed, 34 insertions(+), 6 deletions(-)
+
+diff --git a/src/Formats/FormatFactory.cpp b/src/Formats/FormatFactory.cpp
+index a9991e1ab..20c2c89fd 100644
+--- a/src/Formats/FormatFactory.cpp
++++ b/src/Formats/FormatFactory.cpp
+@@ -844,6 +844,18 @@ static void addExistingProgressToOutputFormat(OutputFormatPtr format, const Cont
+     }
+ }
+ 
++/// `ParallelFormattingOutputFormat` encodes every chunk with a fresh formatter, so a format that carries state
++/// from one chunk to the next under some settings must stay serial with those settings.
++static bool outputFormatSettingsAllowParallelFormatting(const String & name, const FormatSettings & format_settings)
++{
++    /// ArrowStream: combining small blocks into larger record batches, and dictionaries extended across
++    /// batches by deltas, both span chunks.
++    if (boost::algorithm::to_lower_copy(name) == "arrowstream")
++        return !format_settings.arrow.output_record_batch_rows && !format_settings.arrow.output_record_batch_bytes
++            && !format_settings.arrow.low_cardinality_as_dictionary;
++    return true;
++}
++
+ OutputFormatPtr FormatFactory::getOutputFormatParallelIfPossible(
+     const String & name,
+     WriteBuffer & buf,
+@@ -860,7 +872,8 @@ OutputFormatPtr FormatFactory::getOutputFormatParallelIfPossible(
+     const Settings & settings = context->getSettingsRef();
+ 
+     if (settings[Setting::output_format_parallel_formatting] && getCreators(name).supports_parallel_formatting
+-        && !settings[Setting::output_format_json_array_of_rows])
++        && !settings[Setting::output_format_json_array_of_rows]
++        && outputFormatSettingsAllowParallelFormatting(name, format_settings))
+     {
+         auto formatter_creator = [output_getter, sample, format_settings, format_filter_info] (WriteBuffer & output) -> OutputFormatPtr
+         {
+diff --git a/src/Processors/Formats/Impl/ArrowIPC/ArrowIPCBlockOutputFormat.cpp b/src/Processors/Formats/Impl/ArrowIPC/ArrowIPCBlockOutputFormat.cpp
+index 9f10af4a2..da537b40a 100644
+--- a/src/Processors/Formats/Impl/ArrowIPC/ArrowIPCBlockOutputFormat.cpp
++++ b/src/Processors/Formats/Impl/ArrowIPC/ArrowIPCBlockOutputFormat.cpp
+@@ -379,11 +379,16 @@ void ArrowIPCBlockOutputFormat::writeRecordBatch(
+         record_blocks.push_back({written.offset, written.metadata_length, written.body_length});
+ }
+ 
+-void ArrowIPCBlockOutputFormat::consume(Chunk chunk)
++void ArrowIPCBlockOutputFormat::writePrefix()
+ {
+-    /// Not in `writeChunk`: a reader gets the schema on the first chunk even when batches are combined.
++    /// `IOutputFormat` writes the prefix before the first chunk and before finalizing, so the schema leads the
++    /// output even for an empty result. Under parallel formatting the prefix is written by a formatter
++    /// instance of its own, and every chunk by a fresh instance that must write only its record batches.
+     writeSchemaIfNeeded();
++}
+ 
++void ArrowIPCBlockOutputFormat::consume(Chunk chunk)
++{
+     const size_t target_rows = format_settings.arrow.output_record_batch_rows;
+     const size_t target_bytes = format_settings.arrow.output_record_batch_bytes;
+     if (!target_rows && !target_bytes)
+@@ -466,9 +471,9 @@ void ArrowIPCBlockOutputFormat::finalizeImpl()
+     if (staged.getNumRows())
+         writeChunk(std::move(staged));
+ 
+-    /// Make sure even an empty result produces a valid stream/file (schema, then EOS or footer).
+-    writeSchemaIfNeeded();
+-
++    /// The schema was written by `writePrefix`, which `IOutputFormat` calls before finalizing, so even an empty
++    /// result is a valid stream/file. Writing it here again would duplicate it under parallel formatting, where
++    /// finalization runs in a fresh formatter instance.
+     if (stream)
+     {
+         message_writer->writeEOS();
+@@ -524,6 +529,10 @@ void registerOutputFormatArrow(FormatFactory & factory)
+         });
+     factory.markFormatHasNoAppendSupport("ArrowStream");
+     factory.markOutputFormatPrefersLargeBlocks("ArrowStream");
++    /// Record batches are independent messages between the schema (prefix) and the end-of-stream marker, so
++    /// chunks can be encoded in parallel and written in order. The `Arrow` file format stays serial: its footer
++    /// records the offset of every batch.
++    factory.markOutputFormatSupportsParallelFormatting("ArrowStream");
+     factory.markOutputFormatNotTTYFriendly("ArrowStream");
+     factory.setContentType("ArrowStream", "application/octet-stream");
+ }
+diff --git a/src/Processors/Formats/Impl/ArrowIPC/ArrowIPCBlockOutputFormat.h b/src/Processors/Formats/Impl/ArrowIPC/ArrowIPCBlockOutputFormat.h
+index 965cd893d..81b6af6ff 100644
+--- a/src/Processors/Formats/Impl/ArrowIPC/ArrowIPCBlockOutputFormat.h
++++ b/src/Processors/Formats/Impl/ArrowIPC/ArrowIPCBlockOutputFormat.h
+@@ -33,6 +33,11 @@ namespace DB
+ /// is on — as an Arrow dictionary-encoded column (a single dictionary per id, extended across batches via deltas).
+ /// Each chunk becomes one record batch, except when it holds more data than the 32-bit offsets of the Arrow
+ /// IPC buffers can address, in which case it is split across several record batches.
++///
++/// The schema is the format's prefix and the end-of-stream marker its finalization, so `ArrowStream` supports
++/// parallel formatting: each chunk can be encoded by its own formatter instance and the results concatenated
++/// in order. `FormatFactory` keeps it serial when record batches are combined or dictionaries are written,
++/// because both carry state from one chunk to the next.
+ class ArrowIPCBlockOutputFormat final : public IOutputFormat
+ {
+ public:
+@@ -41,6 +46,7 @@ public:
+     String getName() const override { return "ArrowIPCBlockOutputFormat"; }
+ 
+ private:
++    void writePrefix() override;
+     void consume(Chunk) override;
+     void finalizeImpl() override;
+     void resetFormatterImpl() override;
+-- 
+2.43.0
+

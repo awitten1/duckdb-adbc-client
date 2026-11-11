@@ -1,0 +1,32 @@
+Output of scripts/parallel_formatting.sh (2026-11-11) against the modified build a2d3db7e5, before the prototype:
+RowBinary with ClickHouse's existing parallel formatting off and on, ArrowStream (serial only) for reference.
+Run names are <format>-par<output_format_parallel_formatting>-cpu<curl CPU>-<repeat>.
+
+ArrowStream-par0-cpu9-1: curl wall 7.366525 s, 9673331584 bytes
+ArrowStream-par0-cpu9-2: curl wall 7.315481 s, 9673331584 bytes
+RowBinary-par0-cpu9-1: curl wall 12.456757 s, 8017552809 bytes
+RowBinary-par0-cpu9-2: curl wall 12.642339 s, 8017552809 bytes
+RowBinary-par1-cpu9-1: curl wall 5.013126 s, 8017552809 bytes
+RowBinary-par1-cpu9-2: curl wall 4.862404 s, 8017552809 bytes
+ArrowStream-par0-cpu19-1: curl wall 9.860159 s, 9673331584 bytes
+ArrowStream-par0-cpu19-2: curl wall 9.816349 s, 9673331584 bytes
+RowBinary-par0-cpu19-1: curl wall 14.581104 s, 8017552809 bytes
+RowBinary-par0-cpu19-2: curl wall 14.586483 s, 8017552809 bytes
+RowBinary-par1-cpu19-1: curl wall 6.379867 s, 8017552809 bytes
+RowBinary-par1-cpu19-2: curl wall 6.321239 s, 8017552809 bytes
+
+    ┌─run──────────────────────┬─wall_s─┬─cpu_s─┬─send_blocked_s─┬─sent_gb─┬─output_name────────────────────┬─output_busy_s─┐
+ 1. │ ArrowStream-par0-cpu9-1  │   7.37 │  28.5 │            3.5 │    9.67 │ ArrowIPCBlockOutputFormat      │          6.87 │
+ 2. │ ArrowStream-par0-cpu9-2  │   7.32 │  28.4 │           3.48 │    9.67 │ ArrowIPCBlockOutputFormat      │          6.84 │
+ 3. │ RowBinary-par0-cpu9-1    │  12.46 │  33.2 │           2.69 │    8.02 │                                │             0 │
+ 4. │ RowBinary-par0-cpu9-2    │  12.64 │  33.5 │           2.76 │    8.02 │                                │             0 │
+ 5. │ RowBinary-par1-cpu9-1    │   5.01 │  43.9 │           3.22 │    8.02 │ ParallelFormattingOutputFormat │          4.61 │
+ 6. │ RowBinary-par1-cpu9-2    │   4.86 │  45.3 │           3.12 │    8.02 │ ParallelFormattingOutputFormat │          4.47 │
+ 7. │ ArrowStream-par0-cpu19-1 │   9.86 │  30.8 │           5.94 │    9.67 │ ArrowIPCBlockOutputFormat      │           9.3 │
+ 8. │ ArrowStream-par0-cpu19-2 │   9.82 │  30.6 │           5.92 │    9.67 │ ArrowIPCBlockOutputFormat      │          9.27 │
+ 9. │ RowBinary-par0-cpu19-1   │  14.58 │  35.2 │           4.79 │    8.02 │                                │             0 │
+10. │ RowBinary-par0-cpu19-2   │  14.59 │  35.3 │           4.73 │    8.02 │                                │             0 │
+11. │ RowBinary-par1-cpu19-1   │   6.38 │  36.2 │           4.72 │    8.02 │ ParallelFormattingOutputFormat │          5.89 │
+12. │ RowBinary-par1-cpu19-2   │   6.32 │  37.9 │           4.71 │    8.02 │ ParallelFormattingOutputFormat │          5.87 │
+    └──────────────────────────┴────────┴───────┴────────────────┴─────────┴────────────────────────────────┴───────────────┘
+(The serial RowBinary output processor is named "RowBinary", which this query did not match; its busy time was not captured.)
