@@ -136,6 +136,12 @@ ClickHouse's side, from `system.query_log` ([parallel](./data/streams-par1-click
 **Bytes on the wire:** 4.56 GB instead of 9.67 GB, 2.1× less ([curl.txt](./data/lz4/curl.txt), and
 `gb_sent_per_batch` in ClickHouse's query log).
 
+![LZ4 runtime and throughput by stream count](./lz4_streams.png)
+
+[Vector version](./lz4_streams.svg); data in [lz4_streams.tsv](./lz4_streams.tsv). On the right, dashed lines are
+the compressed bytes crossing the link and solid lines the uncompressed Arrow data those bytes carry. Even at
+10 streams, the compressed traffic uses only 0.67 GB/s of the 1.18 GB/s link.
+
 **ClickHouse compresses the whole response on one thread.** With `compress=1`, ClickHouse's HTTP handler wraps the
 response in a `CompressedWriteBuffer`, so every byte of a query's result passes through one compressing buffer:
 - on the parallel formatting collector thread, with parallel formatting (direct send no longer applies);
@@ -207,4 +213,5 @@ The same binary on the Wisconsin host (2.6 GHz, DuckDB on the other CPU socket, 
     (`&compress=1` for the LZ4 run).
 - **[data/](./data/):** the raw output of each step without compression, including the full run log, plus
   `iperf3.txt`, `null-format.txt` and `frequency.txt`. **[data/lz4/](./data/lz4/)** holds the LZ4 run.
-- **[plot_two_node.py](./plot_two_node.py)** draws the chart: `python3 plot_two_node.py data .` (needs matplotlib).
+- **[plot_two_node.py](./plot_two_node.py)** draws both charts (`streams.png` and `lz4_streams.png`):
+  `python3 plot_two_node.py data .` (needs matplotlib).
