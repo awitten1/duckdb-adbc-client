@@ -1,0 +1,36 @@
+Correctness of the direct-send build c933d005d (2026-11-11).
+
+=== scripts/parallel_arrow_correctness.sh
+--- Byte comparison, serial vs parallel formatting (sha256 prefix, bytes)
+full-table-1-thread                serial 36156cd0c8923319 9673331584    parallel 36156cd0c8923319 9673331584    SAME
+ordered-500k-32-threads            serial 616868a5760563de 64515848      parallel 616868a5760563de 64515848      SAME
+empty-result                       serial 33edb5976503206c 512           parallel 33edb5976503206c 512           SAME
+limit-10                           serial 5cd502ef685837bf 2464          parallel 5cd502ef685837bf 2464          SAME
+low-cardinality-dictionary         serial 763cf3799710223a 6002960       parallel 763cf3799710223a 6002960       SAME
+combined-record-batches            serial 758b6daf5f7c635c 64481760      parallel 758b6daf5f7c635c 64481760      SAME
+--- read_adbc through the connector (arrow-rs decoding)
+serial,75000000,691747052758391932685914880
+parallel,75000000,691747052758391932685914880
+read_adbc checksums: SAME
+--- An error in the middle of the stream must reach DuckDB with parallel formatting too
+parallel=0: error surfaced
+parallel=1: error surfaced
+ALL CHECKS PASSED
+
+=== scripts/direct_write_formats.sh (2,000,000 rows ordered by key, 32 threads; sha256 prefix)
+ArrowStream                                  serial 190f4914c64239de  parallel 190f4914c64239de  SAME
+RowBinary                                    serial 64b538686582111e  parallel 64b538686582111e  SAME
+TSV                                          serial e7c644bc364fd273  parallel e7c644bc364fd273  SAME
+CSV                                          serial d630b4dfebdb29ae  parallel d630b4dfebdb29ae  SAME
+JSONEachRow                                  serial a865d3740360bba1  parallel a865d3740360bba1  SAME
+ArrowStream over HTTP/1.0 (not chunked)      serial 190f4914c64239de  parallel 190f4914c64239de  SAME
+RowBinary over HTTP/1.0 (not chunked)        serial 64b538686582111e  parallel 64b538686582111e  SAME
+ArrowStream with progress headers            serial 190f4914c64239de  parallel 190f4914c64239de  SAME
+ArrowStream, gzip response (copy fallback)   serial b16b9b26c7a67222  parallel ea5085c54f9c7ab8  DIFFERENT
+ArrowStream, buffer_size=1000000 (cascade)   serial 190f4914c64239de  parallel 190f4914c64239de  SAME
+
+--- The gzip case decompressed (curl --compressed), against the uncompressed serial body
+parallel=0 gzip, decompressed: 190f4914c64239de
+parallel=1 gzip, decompressed: 190f4914c64239de
+uncompressed serial:            190f4914c64239de
+(Identical content; the compressed bytes differ only in where the compressor flushes.)

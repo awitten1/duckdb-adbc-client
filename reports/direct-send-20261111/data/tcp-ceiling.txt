@@ -1,0 +1,24 @@
+Output of scripts/tcp_ceiling.sh (2026-11-11), parallel formatting prototype a5be5f0c7 (before direct send).
+The GB/s and "send queue" fields of the ClickHouse lines failed to print (script bugs); throughput is
+9.67 GB / time. skmem: tb = socket send buffer size, w = bytes queued in it at 3 s.
+
+##### Default TCP buffer limits: tcp_wmem=[4096	16384	4194304] tcp_rmem=[4096	131072	6291456]
+iperf3 one connection, sender CPU 3 -> receiver CPU 9, 128KB writes: 3.25 GB/s, sender CPU 100%, receiver CPU 75%
+iperf3 one connection, sender CPU 3 -> receiver CPU 9, 1MB writes: 3.58 GB/s, sender CPU 100%, receiver CPU 79%
+iperf3 one connection, sender CPU 3 -> receiver CPU 19, 128KB writes: 1.78 GB/s, sender CPU 100%, receiver CPU 57%
+iperf3 one connection, sender CPU 3 -> receiver CPU 19, 1MB writes: 1.89 GB/s, sender CPU 100%, receiver CPU 60%
+ClickHouse download, curl on CPU 9, run 1: 5.22 s, server blocked in send() 3.2 s; at 3 s: server skmem:(r0,rb131072,t0,tb2626560,f1326,w2770,o0,bl0,d0)
+ClickHouse download, curl on CPU 9, run 2: 5.32 s, server blocked in send() 3.31 s; at 3 s: server skmem:(r0,rb131072,t0,tb2626560,f35562,w214294,o0,bl960,d0)
+ClickHouse download, curl on CPU 19, run 1: 7.65 s, server blocked in send() 5.71 s; at 3 s: server skmem:(r0,rb131072,t0,tb2626560,f2718,w931170,o0,bl2880,d0)
+ClickHouse download, curl on CPU 19, run 2: 7.78 s, server blocked in send() 5.79 s; at 3 s: server skmem:(r0,rb131072,t0,tb2626560,f2587,w120293,o0,bl960,d0)
+
+##### 64 MB TCP buffer limits: tcp_wmem=[4096	16384	67108864] tcp_rmem=[4096	131072	67108864]
+iperf3 one connection, sender CPU 3 -> receiver CPU 9, 128KB writes: 3.14 GB/s, sender CPU 100%, receiver CPU 72%
+iperf3 one connection, sender CPU 3 -> receiver CPU 9, 1MB writes: 3.56 GB/s, sender CPU 100%, receiver CPU 79%
+iperf3 one connection, sender CPU 3 -> receiver CPU 19, 128KB writes: 1.73 GB/s, sender CPU 100%, receiver CPU 56%
+iperf3 one connection, sender CPU 3 -> receiver CPU 19, 1MB writes: 1.88 GB/s, sender CPU 100%, receiver CPU 61%
+ClickHouse download, curl on CPU 9, run 1: 5.39 s, server blocked in send() 3.37 s; at 3 s: server skmem:(r0,rb131072,t0,tb2626560,f0,w0,o0,bl0,d0)
+ClickHouse download, curl on CPU 9, run 2: 5.15 s, server blocked in send() 3.17 s; at 3 s: server skmem:(r0,rb131072,t0,tb2626560,f360,w3736,o0,bl0,d0)
+ClickHouse download, curl on CPU 19, run 1: 7.53 s, server blocked in send() 5.63 s; at 3 s: server skmem:(r0,rb131072,t0,tb2626560,f4064,w532512,o0,bl960,d0)
+ClickHouse download, curl on CPU 19, run 2: 7.77 s, server blocked in send() 5.79 s; at 3 s: server skmem:(r0,rb131072,t0,tb2626560,f0,w0,o0,bl0,d0)
+restored tcp_wmem=[4096	16384	4194304] tcp_rmem=[4096	131072	6291456]

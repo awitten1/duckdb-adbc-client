@@ -1,0 +1,10 @@
+   ┌─run──────────┬─wall_s─┬─server_cpu_s─┬─output_stage───────────────────┬─output_busy_s─┬─first_input_wait_s─┬─send_blocked_s─┬─busy_not_sending_s─┬─readers_blocked_max_s─┐
+1. │ par0-cpu19-1 │   9.85 │         30.9 │ ArrowIPCBlockOutputFormat      │          9.28 │               0.54 │           5.92 │               3.36 │                  9.17 │
+2. │ par0-cpu19-2 │   9.86 │         30.9 │ ArrowIPCBlockOutputFormat      │          9.29 │               0.54 │           5.91 │               3.38 │                  9.18 │
+3. │ par0-cpu9-1  │   7.21 │         28.4 │ ArrowIPCBlockOutputFormat      │          6.73 │               0.46 │           3.43 │               3.29 │                  6.53 │
+4. │ par0-cpu9-2  │   7.35 │         28.5 │ ArrowIPCBlockOutputFormat      │          6.86 │               0.46 │           3.48 │               3.38 │                  6.67 │
+5. │ par1-cpu19-1 │   6.22 │         30.3 │ ParallelFormattingOutputFormat │          5.59 │               0.58 │           6.16 │              -0.57 │                  5.47 │
+6. │ par1-cpu19-2 │    6.4 │         30.3 │ ParallelFormattingOutputFormat │          5.77 │               0.58 │           6.34 │              -0.57 │                  5.66 │
+7. │ par1-cpu9-1  │    4.6 │         33.3 │ ParallelFormattingOutputFormat │          4.04 │               0.52 │           4.51 │              -0.47 │                  3.71 │
+8. │ par1-cpu9-2  │   4.45 │         33.6 │ ParallelFormattingOutputFormat │           3.9 │               0.51 │           4.36 │              -0.46 │                  3.56 │
+   └──────────────┴────────┴──────────────┴────────────────────────────────┴───────────────┴────────────────────┴────────────────┴────────────────────┴───────────────────────┘

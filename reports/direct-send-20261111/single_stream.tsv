@@ -1,0 +1,13 @@
+config	socket	download_median_s
+serial	curl on ClickHouse's socket	7.28
+serial	curl on the other socket	9.86
+parallel	curl on ClickHouse's socket	5.29
+parallel	curl on the other socket	7.54
+direct	curl on ClickHouse's socket	4.53
+direct	curl on the other socket	6.31
+
+run	collector_user_s	collector_kernel_s
+before cpu9	1.96	3.26
+after cpu9	0.08	4.34
+before cpu19	1.98	5.60
+after cpu19	0.05	6.71

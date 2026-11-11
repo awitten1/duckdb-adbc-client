@@ -1,0 +1,155 @@
+From c933d005d4c4adf1c1fe94f0e9910c5295069a99 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] Send parallel-formatted output to HTTP clients without
+ copying it
+
+The parallel formatting collector copied every formatted unit into the HTTP
+response buffer before sending it, which took about 2 s of its time for a
+9.67 GB ArrowStream result. WriteBufferFromHTTPServerResponse can now send a
+large block straight from the caller memory as one piece of the body, through
+the same flush path, so headers, chunk framing, byte counts and profile events
+are unchanged. Small blocks, fixed-length bodies and any buffer in between
+(compression, response buffering) keep the copy.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/IO/WriteBufferWithDirectWrite.h           | 18 ++++++++++++++
+ .../Impl/ParallelFormattingOutputFormat.cpp   | 10 +++++++-
+ .../WriteBufferFromHTTPServerResponse.cpp     | 24 +++++++++++++++++++
+ .../HTTP/WriteBufferFromHTTPServerResponse.h  |  8 ++++++-
+ 4 files changed, 58 insertions(+), 2 deletions(-)
+ create mode 100644 src/IO/WriteBufferWithDirectWrite.h
+
+diff --git a/src/IO/WriteBufferWithDirectWrite.h b/src/IO/WriteBufferWithDirectWrite.h
+new file mode 100644
+index 000000000..68c430828
+--- /dev/null
++++ b/src/IO/WriteBufferWithDirectWrite.h
+@@ -0,0 +1,18 @@
++#pragma once
++
++#include <cstddef>
++
++namespace DB
++{
++
++/// A write buffer that can send a block of bytes from the caller's memory instead of first copying it into its
++/// own buffer. `writeDirect` has the effect of `write`: bytes already buffered go out first, and the block's
++/// bytes count towards `count()`. Implementations may fall back to copying, for example for small blocks.
++class IWriteBufferWithDirectWrite
++{
++public:
++    virtual ~IWriteBufferWithDirectWrite() = default;
++    virtual void writeDirect(const char * data, size_t size) = 0;
++};
++
++}
+diff --git a/src/Processors/Formats/Impl/ParallelFormattingOutputFormat.cpp b/src/Processors/Formats/Impl/ParallelFormattingOutputFormat.cpp
+index 65672b8ac..77b189b83 100644
+--- a/src/Processors/Formats/Impl/ParallelFormattingOutputFormat.cpp
++++ b/src/Processors/Formats/Impl/ParallelFormattingOutputFormat.cpp
+@@ -1,5 +1,6 @@
+ #include <Processors/Formats/Impl/ParallelFormattingOutputFormat.h>
+ 
++#include <IO/WriteBufferWithDirectWrite.h>
+ #include <Processors/Port.h>
+ #include <Common/scope_guard_safe.h>
+ #include <Common/setThreadName.h>
+@@ -142,6 +143,10 @@ namespace DB
+     {
+         ThreadGroupSwitcher switcher(thread_group, ThreadName::PARALLEL_FORMATER_COLLECTOR);
+ 
++        /// An output buffer that can send a unit from the unit's own memory (the HTTP response) saves copying
++        /// every formatted unit into it, which is otherwise much of this thread's work.
++        auto * direct_out = dynamic_cast<IWriteBufferWithDirectWrite *>(&out);
++
+         try
+         {
+             while (!emergency_stop)
+@@ -164,7 +169,10 @@ namespace DB
+                 auto copy_of_unit_type = unit.type;
+ 
+                 /// Do main work here.
+-                out.write(unit.segment.data(), unit.actual_memory_size);
++                if (direct_out)
++                    direct_out->writeDirect(unit.segment.data(), unit.actual_memory_size);
++                else
++                    out.write(unit.segment.data(), unit.actual_memory_size);
+ 
+                 if (auto_flush || need_flush.exchange(false) || unit.type == ProcessingUnitType::FINALIZE)
+                     out.next();
+diff --git a/src/Server/HTTP/WriteBufferFromHTTPServerResponse.cpp b/src/Server/HTTP/WriteBufferFromHTTPServerResponse.cpp
+index 851606e8f..e17840dfa 100644
+--- a/src/Server/HTTP/WriteBufferFromHTTPServerResponse.cpp
++++ b/src/Server/HTTP/WriteBufferFromHTTPServerResponse.cpp
+@@ -1,4 +1,5 @@
+ #include <Server/HTTP/WriteBufferFromHTTPServerResponse.h>
++#include <base/scope_guard.h>
+ #include <Server/HTTP/exceptionCodeToHTTPStatus.h>
+ #include <IO/HTTPCommon.h>
+ #include <IO/Progress.h>
+@@ -123,6 +124,29 @@ void WriteBufferFromHTTPServerResponse::finishSendHeaders()
+ }
+ 
+ 
++void WriteBufferFromHTTPServerResponse::writeDirect(const char * data, size_t size)
++{
++    /// Copying a small block is cheaper than sending it on its own, and a fixed-length body may have to cut
++    /// the data, which only the buffered path does.
++    static constexpr size_t min_direct_write_size = 64 * 1024;
++    if (size < min_direct_write_size || HTTPWriteBuffer::isFixedLength() || isCanceled())
++    {
++        write(data, size);
++        return;
++    }
++
++    /// Send what is already buffered first, so the bytes stay in order.
++    next();
++
++    /// Present the caller's bytes as this buffer's contents and flush them through the usual path, so the
++    /// headers, chunk framing, HEAD requests, byte counts and profile events stay exactly as for a flush.
++    /// Nothing on that path writes into the buffer: headers and chunk framing go straight to the socket.
++    const Buffer own_memory = internalBuffer();
++    SCOPE_EXIT({ set(own_memory.begin(), own_memory.size(), 0); });
++    set(const_cast<char *>(data), size, size);
++    next();
++}
++
+ void WriteBufferFromHTTPServerResponse::nextImpl()
+ {
+     {
+diff --git a/src/Server/HTTP/WriteBufferFromHTTPServerResponse.h b/src/Server/HTTP/WriteBufferFromHTTPServerResponse.h
+index b7c3c3ade..02643c642 100644
+--- a/src/Server/HTTP/WriteBufferFromHTTPServerResponse.h
++++ b/src/Server/HTTP/WriteBufferFromHTTPServerResponse.h
+@@ -5,6 +5,7 @@
+ #include <IO/HTTPCommon.h>
+ #include <IO/Progress.h>
+ #include <IO/WriteBuffer.h>
++#include <IO/WriteBufferWithDirectWrite.h>
+ #include <Server/HTTP/HTTPServerResponse.h>
+ #include <Poco/Net/StreamSocket.h>
+ #include <Common/NetException.h>
+@@ -22,7 +23,7 @@ namespace DB
+ /// Also this class write and flush special X-ClickHouse-Progress HTTP headers
+ ///  if no data was sent at the time of progress notification.
+ /// This allows to implement progress bar in HTTP clients.
+-class WriteBufferFromHTTPServerResponse final : public HTTPWriteBuffer
++class WriteBufferFromHTTPServerResponse final : public HTTPWriteBuffer, public IWriteBufferWithDirectWrite
+ {
+ public:
+     static constexpr std::string_view EXCEPTION_MARKER = "__exception__";
+@@ -38,6 +39,11 @@ public:
+     /// Writes progress in repeating HTTP headers.
+     void onProgress(const Progress & progress, ContextPtr context);
+ 
++    /// Sends a large block straight from `data` as its own piece of the body (one HTTP chunk when chunked),
++    /// through the same path as a buffer flush. Used by parallel formatting to avoid copying every formatted
++    /// unit into this buffer.
++    void writeDirect(const char * data, size_t size) override;
++
+     /// Turn CORS on or off.
+     /// The setting has any effect only if HTTP headers haven't been sent yet.
+     void addHeaderCORS(bool enable_cors)
+-- 
+2.43.0
+
