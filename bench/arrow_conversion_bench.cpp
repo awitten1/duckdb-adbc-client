@@ -1,5 +1,5 @@
 // Microbenchmark for DuckDB's Arrow -> DuckDB conversion, the per-batch step that
-// read_adbc and read_adbc_ranges run on every ClickHouse result batch.
+// read_adbc runs on every ClickHouse result batch.
 //
 // Each fixture is one column shaped like a TPC-H orders column. DuckDB generates it
 // and exports it to Arrow (plain utf8 strings, decimal128 decimals, as ClickHouse
@@ -61,6 +61,15 @@ const FixtureSpec FIXTURES[] = {
      "substring(i::VARCHAR || ' furiously regular deposits sleep quickly across the pending ideas; blithely final', "
      "1, 19 + ((i * 7919) % 60)::INTEGER)",
      "u"},
+    // Every inline length, 0-12 bytes: exercises zero padding of short strings.
+    {"string_0_12", "substring(i::VARCHAR || 'abcdefghijklm', 1, (i % 13)::INTEGER)", "u"},
+    // 10% NULLs: exercises the NULL-aware conversion loops.
+    {"string_19_78_nulls",
+     "CASE WHEN i % 10 = 3 THEN NULL ELSE substring(i::VARCHAR || ' furiously regular deposits sleep quickly "
+     "across the pending ideas; blithely final', 1, 19 + ((i * 7919) % 60)::INTEGER) END",
+     "u"},
+    {"decimal_15_2_nulls",
+     "CASE WHEN i % 10 = 3 THEN NULL ELSE (((i * 7919) % 50000000) / 100.0)::DECIMAL(15, 2) END", "d:15,2,128"},
 };
 
 // One column exported to Arrow, plus its DuckDB source for verification.
@@ -216,7 +225,9 @@ void Verify(const FixtureSpec &spec, Fixture &fixture) {
             }
             auto got = chunk.GetValue(0, row);
             auto want = expected.GetValue(0, expected_pos);
-            if (got != want) {
+            // Value comparison throws on NULL, so compare nullness first.
+            bool same = got.IsNull() || want.IsNull() ? got.IsNull() == want.IsNull() : got == want;
+            if (!same) {
                 Fail(StringUtil::Format("%s row %llu: converted %s, expected %s", spec.name,
                                         static_cast<unsigned long long>(checked), got.ToString(),
                                         want.ToString()));

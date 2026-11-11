@@ -1,5 +1,8 @@
 # Microbenchmarks
 
+- [Arrow → DuckDB conversion](#arrow--duckdb-conversion): `arrow_conversion_bench`, `counters_per_row.py`, `ab_compare.py`
+- [Parallel `read_adbc` streams](#parallel-read_adbc-streams): `parallel_read_adbc`
+
 ## Arrow → DuckDB conversion
 
 `arrow_conversion_bench` times DuckDB's Arrow → DuckDB conversion
@@ -31,6 +34,26 @@ Options:
 
 Fixture expressions use only functions built into DuckDB's core library. The
 statically linked benchmark does not load the `core_functions` extension.
+
+Three more fixtures cover edge cases rather than TPC-H columns: `string_0_12`
+(every inline string length, 0–12 bytes), and `string_19_78_nulls` and
+`decimal_15_2_nulls` (10% NULLs). Verification treats NULL as equal only to NULL.
+
+### Comparing two builds
+
+`ab_compare.py` alternates two benchmark binaries for a number of rounds and
+prints each fixture's median ns/row for both, with the speedup. Each run verifies
+every converted value first, so a wrong result fails the comparison.
+
+```sh
+cp build/release/extension/adbc/bench/arrow_conversion_bench /tmp/conversion_before
+# ...apply the change and rebuild...
+taskset -c 10 python3 bench/ab_compare.py /tmp/conversion_before \
+    build/release/extension/adbc/bench/arrow_conversion_bench 3 ab.json
+```
+
+The arguments are the two binaries, the number of rounds (default 2) and an
+optional JSON file for the raw medians.
 
 ### Hardware counters
 
@@ -72,3 +95,49 @@ These numbers match the per-column conversion times measured in a full
 single-stream ClickHouse scan: 10.7–11.7 ns/row for strings and 4.6 ns/row for the
 decimal. The raw Google Benchmark output is in
 [baseline.json](./baseline.json).
+
+## Parallel `read_adbc` streams
+
+`parallel_read_adbc` reads one table as N concurrent `read_adbc` streams from a
+single DuckDB process. For each stream count N it splits the key column's range
+into N equal, contiguous ranges and starts N threads. Each thread opens its own
+connection and runs an ordinary query for its range:
+
+```sql
+SELECT * FROM read_adbc('profile://myclickhouse',
+    'SELECT * FROM tpch_sf50.orders WHERE o_orderkey BETWEEN lo AND hi [ORDER BY ...] [SETTINGS max_threads=K]')
+```
+
+It reports the wall time from starting the threads until the last one finishes.
+Rows are consumed with `EXPLAIN ANALYZE`, so no result is materialized.
+
+### Build and run
+
+The target is not part of the default build. It needs a reachable ADBC source,
+for example the ClickHouse server from `clickhouse/start-clickhouse.sh`:
+
+```sh
+ninja -C build/release parallel_read_adbc
+build/release/extension/adbc/bench/parallel_read_adbc --ch-max-threads=split 1 2 4 8
+```
+
+Options:
+
+- `--profile=URI`: ADBC profile (default `profile://myclickhouse`).
+- `--database=NAME`, `--table=NAME`: source table (default `tpch_sf50.orders`).
+- `--key=COLUMN`: integer column used to split the table (default `o_orderkey`).
+- `--order-by=EXPR`: append `ORDER BY EXPR` to each range query, so the server
+  sorts every stream.
+- `--ch-max-threads=K`: append `SETTINGS max_threads=K` to each range query;
+  `split` uses floor(32 / N).
+- `--threads=K`: DuckDB worker threads shared by all streams (default 16).
+- `--memory-limit=SIZE`: DuckDB memory limit (default 56GiB).
+- `--repeats=R`: measured repeats per stream count (default 3), after one
+  warmup. Repeats alternate the order of stream counts.
+- `--checksum`: instead of timing, check that each stream count's per-range
+  row counts and row-hash sums add up to one full `read_adbc`.
+
+It prints one `streams`, `repeat`, `wall_s` line per batch on stdout, and a
+median and speedup summary on stderr. Results are in
+[reports/stream-limits-20261110](../reports/stream-limits-20261110/README.md) and
+[reports/sorted-streams-20261111](../reports/sorted-streams-20261111/README.md).
