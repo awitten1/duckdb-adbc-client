@@ -47,6 +47,10 @@ build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} ${LOADABLE_EXTENSION_NAME}
                          ${EXTENSION_SOURCES})
 
+# Optional microbenchmarks (not part of the default build); added before the
+# release strip flags below so the benchmark keeps symbols for profiling.
+add_subdirectory(bench)
+
 # Hide symbols for release builds
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
