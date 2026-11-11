@@ -1,0 +1,24 @@
+Subject: [PATCH] EXPERIMENT: skip Arrow IPC validation
+
+---
+ src/lib.rs | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/lib.rs b/src/lib.rs
+index 35fb35f..cdbf30c 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -124,7 +124,9 @@ impl ArrowQueryExt for Query {
+                 .with_product_info("clickhouse-ext-arrow", _priv::CARGO_PKG_VERSION)
+                 .fetch_bytes("ArrowStream")?,
+             buffer: Buffer::default(),
+-            decoder: StreamDecoder::new(),
++            // EXPERIMENT: trust ClickHouse's output and skip per-array validation (offsets, UTF-8).
++            // SAFETY: invalid data from the server would no longer be rejected here.
++            decoder: unsafe { StreamDecoder::new().with_skip_validation(true) },
+         })
+     }
+ }
+-- 
+2.43.0
+

@@ -1,0 +1,8 @@
+streams	current_same_slower_s	current_same_faster_s	current_other_slower_s	current_other_faster_s	reserve_same_slower_s	reserve_same_faster_s	reserve_other_slower_s	reserve_other_faster_s
+1	7.955	7.814	9.764	9.669	7.665	7.612	9.887	9.872
+2	4.976	4.761	5.462	5.444	5.621	5.171	5.200	5.074
+3	4.692	4.623	4.260	3.998	3.968	3.933	3.757	3.725
+4	5.175	5.067	4.439	4.437	3.976	3.869	3.542	3.534
+6	5.181	5.132	4.668	4.667	4.085	4.044	3.849	3.780
+8	5.141	5.054	4.937	4.920	4.056	4.015	3.976	3.859
+10	5.106	5.105	4.956	4.852	4.059	4.003	4.042	4.016

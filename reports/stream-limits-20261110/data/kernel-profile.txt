@@ -1,0 +1,31 @@
+Output of scripts/kernel_profile_download.sh (2026-11-11), modified ClickHouse 26.11.1.1, one raw curl download per
+run. perf record -e cycles -F 499 -a over ClickHouse's CPUs (0-7,20-27) and curl's CPU, kernel symbols included.
+Symbols at 1.5% or more of each CPU group's samples.
+
+=== curl on CPU 19 (other socket): download 10.02 s
+--- ClickHouse CPUs (0-7,20-27): 18879 samples, 33% in the kernel; top symbols:
+ 45.50% QueryPipelineEx [.] ZSTD_decompressSequences clickhouse
+  9.04% QueryPipelineEx [k] clear_page_erms [kernel.kallsyms]
+  8.08% QueryPipelineEx [.] __llvm_libc::memcpy_ge64_baseline
+  4.34% QueryPipelineEx [k] rep_movs_alternative [kernel.kallsyms]
+  1.52% QueryPipelineEx [.] ZSTD_buildFSETable clickhouse
+--- curl CPU (19): 4919 samples, 92% in the kernel; top symbols:
+ 29.21% curl [k] rep_movs_alternative [kernel.kallsyms]
+  9.36% curl [k] entry_SYSRETQ_unsafe_stack [kernel.kallsyms]
+  4.38% curl [k] entry_SYSCALL_64 [kernel.kallsyms]
+  3.95% curl [k] syscall_return_via_sysret [kernel.kallsyms]
+  3.22% swapper [k] intel_idle [kernel.kallsyms]
+
+=== curl on CPU 9 (ClickHouse's socket): download 7.31 s
+--- ClickHouse CPUs (0-7,20-27): 16448 samples, 26% in the kernel; top symbols:
+ 49.48% QueryPipelineEx [.] ZSTD_decompressSequences clickhouse
+  8.76% QueryPipelineEx [.] __llvm_libc::memcpy_ge64_baseline
+  4.95% QueryPipelineEx [k] rep_movs_alternative [kernel.kallsyms]
+  3.61% QueryPipelineEx [k] clear_page_erms [kernel.kallsyms]
+  1.83% QueryPipelineEx [.] ZSTD_buildFSETable clickhouse
+--- curl CPU (9): 2217 samples, 90% in the kernel; top symbols:
+ 27.88% curl [k] rep_movs_alternative [kernel.kallsyms]
+ 13.24% curl [k] entry_SYSRETQ_unsafe_stack [kernel.kallsyms]
+  4.34% curl [k] syscall_return_via_sysret [kernel.kallsyms]
+  3.59% curl [k] entry_SYSCALL_64 [kernel.kallsyms]
+  3.11% swapper [k] intel_idle [kernel.kallsyms]

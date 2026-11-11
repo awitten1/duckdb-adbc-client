@@ -1,0 +1,319 @@
+diff --git a/src/adbc_scan.cpp b/src/adbc_scan.cpp
+index f529049..115fa6f 100644
+--- a/src/adbc_scan.cpp
++++ b/src/adbc_scan.cpp
+@@ -19,6 +19,19 @@
+ #include "adbc_util.hpp"
+ #include "duckdb/main/config.hpp"
+ 
++#include <cerrno>
++#include <chrono>
++#include <condition_variable>
++#include <cstdio>
++#include <cstring>
++#include <deque>
++#include <cstdlib>
++#include <ctime>
++#include <mutex>
++#include <thread>
++#include <unordered_map>
++#include <unordered_set>
++
+ namespace duckdb {
+ namespace adbc {
+ 
+@@ -26,6 +39,42 @@ using namespace Private;
+ 
+ namespace {
+ 
++// ---- TEMPORARY scan timing, enabled by ADBC_SCAN_TIMING (not for commit) ----
++bool ScanTimingEnabled() {
++    static bool enabled = std::getenv("ADBC_SCAN_TIMING") != nullptr;
++    return enabled;
++}
++double WallNow() {
++    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
++}
++double ThreadCpuNow() {
++    timespec ts;
++    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
++    return double(ts.tv_sec) + double(ts.tv_nsec) * 1e-9;
++}
++// Scan-side timers. The measurement runs one read_adbc query per process, so process-wide totals suffice.
++struct ScanSideTiming {
++    std::mutex mutex;
++    double fetch_call_seconds = 0; // ArrowScanParallelStateNext, including waits for the scan lock
++    idx_t fetch_calls = 0;
++    double convert_seconds = 0;
++    double convert_cpu_seconds = 0;
++    idx_t convert_calls = 0;
++    std::unordered_set<std::thread::id> convert_threads;
++};
++ScanSideTiming &ScanSide() {
++    static ScanSideTiming timing;
++    return timing;
++}
++// ---- end TEMPORARY ----
++
++// EXPERIMENT: one dedicated thread makes every connector get_next call (ADBC_READER_THREAD=1).
++bool ReaderThreadEnabled() {
++    static bool enabled = std::getenv("ADBC_READER_THREAD") != nullptr;
++    return enabled;
++}
++constexpr idx_t READER_QUEUE_BATCHES = 16;
++
+ // Direct read_adbc executions own their handles separately from schema discovery.
+ class AdbcExecutionStream : public ArrowArrayStreamWrapper {
+ public:
+@@ -34,6 +83,8 @@ public:
+     }
+ 
+     ~AdbcExecutionStream() override {
++        StopReader();
++        ReportTiming();
+         // The stream must be released before its statement and connection.
+         if (arrow_array_stream.release) {
+             arrow_array_stream.release(&arrow_array_stream);
+@@ -43,10 +94,195 @@ public:
+ 
+     void Execute() {
+         Handle<Private::AdbcError> error;
++        execute_started = WallNow();
+         CHECK_ADBC(AdbcStatementExecuteQuery(statement.get(), &arrow_array_stream, nullptr, error.get()), IOException);
++        execute_returned = WallNow();
++        if (ReaderThreadEnabled() || ScanTimingEnabled()) {
++            // Wrap the connector's callbacks; its private_data is left untouched.
++            original_get_next = arrow_array_stream.get_next;
++            original_get_last_error = arrow_array_stream.get_last_error;
++            if (ReaderThreadEnabled()) {
++                arrow_array_stream.get_next = QueuedGetNext;
++                arrow_array_stream.get_last_error = QueuedGetLastError;
++            } else {
++                arrow_array_stream.get_next = TimedGetNext;
++            }
++            std::lock_guard<std::mutex> lock(RegistryMutex());
++            Registry()[&arrow_array_stream] = this;
++        }
+     }
+ 
+ private:
++    // ---- TEMPORARY scan timing ----
++    static std::mutex &RegistryMutex() {
++        static std::mutex mutex;
++        return mutex;
++    }
++    static std::unordered_map<ArrowArrayStream *, AdbcExecutionStream *> &Registry() {
++        static std::unordered_map<ArrowArrayStream *, AdbcExecutionStream *> registry;
++        return registry;
++    }
++    static AdbcExecutionStream &Lookup(ArrowArrayStream *stream) {
++        std::lock_guard<std::mutex> lock(RegistryMutex());
++        return *Registry()[stream];
++    }
++    static int TimedGetNext(ArrowArrayStream *stream, ArrowArray *out) {
++        return Lookup(stream).CallConnector(out);
++    }
++    // One connector get_next call, timed when ADBC_SCAN_TIMING is set.
++    int CallConnector(ArrowArray *out) {
++        auto stream = &arrow_array_stream;
++        auto self = this;
++        if (!ScanTimingEnabled()) {
++            return original_get_next(stream, out);
++        }
++        auto started = WallNow();
++        auto cpu_started = ThreadCpuNow();
++        auto result = self->original_get_next(stream, out);
++        auto cpu = ThreadCpuNow() - cpu_started;
++        auto ended = WallNow();
++        std::lock_guard<std::mutex> lock(self->timing_mutex);
++        self->get_next_calls++;
++        self->get_next_seconds += ended - started;
++        self->get_next_cpu_seconds += cpu;
++        if (self->first_get_next < 0) {
++            self->first_get_next = started;
++        }
++        self->last_get_next = ended;
++        self->get_next_threads.insert(std::this_thread::get_id());
++        if (result == 0 && out->release) {
++            self->rows += idx_t(out->length);
++        }
++        return result;
++    }
++    // ---- EXPERIMENT: dedicated reader thread ----
++    // DuckDB's scan threads call this under the scan lock; they only take queued batches.
++    static int QueuedGetNext(ArrowArrayStream *stream, ArrowArray *out) {
++        auto &self = Lookup(stream);
++        auto waited = WallNow();
++        std::unique_lock<std::mutex> lock(self.queue_mutex);
++        if (!self.reader.joinable() && !self.reader_done) {
++            // Start lazily, after DuckDB has finished its own setup calls on this stream.
++            self.reader = std::thread([&self]() { self.ReadAll(); });
++        }
++        self.queue_cv.wait(lock, [&]() { return !self.queue.empty() || self.reader_done; });
++        self.queue_wait_seconds += WallNow() - waited;
++        if (!self.queue.empty()) {
++            *out = self.queue.front();
++            self.queue.pop_front();
++            lock.unlock();
++            self.queue_cv.notify_all();
++            return 0;
++        }
++        if (self.reader_error != 0) {
++            return self.reader_error;
++        }
++        std::memset(out, 0, sizeof(*out)); // end of stream: release == nullptr
++        return 0;
++    }
++    static const char *QueuedGetLastError(ArrowArrayStream *stream) {
++        auto &self = Lookup(stream);
++        std::lock_guard<std::mutex> lock(self.queue_mutex);
++        return self.reader_error_message.empty() ? nullptr : self.reader_error_message.c_str();
++    }
++    void ReadAll() {
++        while (true) {
++            ArrowArray batch;
++            std::memset(&batch, 0, sizeof(batch));
++            auto result = CallConnector(&batch);
++            string message;
++            if (result != 0 && original_get_last_error) {
++                auto error = original_get_last_error(&arrow_array_stream); // read on the failing thread
++                message = error ? error : "Arrow stream failed without an error message";
++            }
++            std::unique_lock<std::mutex> lock(queue_mutex);
++            if (result != 0 || !batch.release) {
++                reader_error = result;
++                reader_error_message = message;
++                reader_done = true;
++                lock.unlock();
++                queue_cv.notify_all();
++                return;
++            }
++            queue_cv.wait(lock, [&]() { return reader_stop || queue.size() < READER_QUEUE_BATCHES; });
++            if (reader_stop) {
++                lock.unlock();
++                batch.release(&batch);
++                return;
++            }
++            queue.push_back(batch);
++            peak_queued = MaxValue<idx_t>(peak_queued, queue.size());
++            lock.unlock();
++            queue_cv.notify_all();
++        }
++    }
++    void StopReader() {
++        {
++            std::lock_guard<std::mutex> lock(queue_mutex);
++            reader_stop = true;
++        }
++        queue_cv.notify_all();
++        if (reader.joinable()) {
++            reader.join();
++        }
++        for (auto &batch : queue) {
++            if (batch.release) {
++                batch.release(&batch);
++            }
++        }
++        queue.clear();
++        std::lock_guard<std::mutex> registry_lock(RegistryMutex());
++        Registry().erase(&arrow_array_stream);
++    }
++    const char *(*original_get_last_error)(ArrowArrayStream *) = nullptr;
++    std::mutex queue_mutex;
++    std::condition_variable queue_cv;
++    std::deque<ArrowArray> queue;
++    std::thread reader;
++    bool reader_stop = false;
++    bool reader_done = false;
++    int reader_error = 0;
++    string reader_error_message;
++    idx_t peak_queued = 0;
++    double queue_wait_seconds = 0;
++    // ---- end EXPERIMENT ----
++
++    void ReportTiming() {
++        if (!ScanTimingEnabled() || original_get_next == nullptr) {
++            return;
++        }
++        {
++            std::lock_guard<std::mutex> lock(RegistryMutex());
++            Registry().erase(&arrow_array_stream);
++        }
++        auto &scan = ScanSide();
++        std::lock_guard<std::mutex> scan_lock(scan.mutex);
++        std::lock_guard<std::mutex> lock(timing_mutex);
++        auto span = last_get_next - first_get_next;
++        std::fprintf(stderr,
++                     "ADBC_SCAN_TIMING rows=%llu batches=%llu\n"
++                     "  execute_query_s=%.3f  execute_to_first_get_next_s=%.3f  stream_span_s=%.3f\n"
++                     "  inside_get_next_s=%.3f (cpu %.3f, waiting %.3f)  gaps_no_get_next_s=%.3f  get_next_threads=%zu\n"
++                     "  scan_fetch_calls=%llu scan_fetch_s=%.3f  lock_wait_s=%.3f\n"
++                     "  convert_calls=%llu convert_s=%.3f (cpu %.3f)  convert_threads=%zu\n"
++                     "  reader_thread=%s  duckdb_queue_wait_s=%.3f (summed over scan threads)  peak_queued=%llu\n",
++                     (unsigned long long)rows, (unsigned long long)get_next_calls, execute_returned - execute_started,
++                     first_get_next - execute_returned, span, get_next_seconds, get_next_cpu_seconds,
++                     get_next_seconds - get_next_cpu_seconds, span - get_next_seconds, get_next_threads.size(),
++                     (unsigned long long)scan.fetch_calls, scan.fetch_call_seconds,
++                     scan.fetch_call_seconds - get_next_seconds, (unsigned long long)scan.convert_calls,
++                     scan.convert_seconds, scan.convert_cpu_seconds, scan.convert_threads.size(),
++                     ReaderThreadEnabled() ? "on" : "off", queue_wait_seconds, (unsigned long long)peak_queued);
++    }
++    int (*original_get_next)(ArrowArrayStream *, ArrowArray *) = nullptr;
++    std::mutex timing_mutex;
++    double execute_started = 0, execute_returned = 0;
++    double first_get_next = -1, last_get_next = 0;
++    double get_next_seconds = 0, get_next_cpu_seconds = 0;
++    idx_t get_next_calls = 0, rows = 0;
++    std::unordered_set<std::thread::id> get_next_threads;
++    // ---- end TEMPORARY ----
++
+     unique_ptr<AdbcConnection> connection;
+     Handle<Private::AdbcStatement> statement;
+ };
+@@ -174,10 +410,18 @@ void AdbcScanFunction(ClientContext &context, TableFunctionInput &input, DataChu
+     // Need more tuples in the current chunk
+     if (local_state.chunk_offset >= static_cast<idx_t>(local_state.chunk->arrow_array.length)) {
+         // Fetch them and exit if there are no more tuples left
+-        if (!ArrowTableFunction::ArrowScanParallelStateNext(context,
+-                                                            input.bind_data.get(),
+-                                                            local_state,
+-                                                            global_state)) {
++        auto fetch_started = ScanTimingEnabled() ? WallNow() : 0; // TEMPORARY timing
++        auto more = ArrowTableFunction::ArrowScanParallelStateNext(context,
++                                                                   input.bind_data.get(),
++                                                                   local_state,
++                                                                   global_state);
++        if (ScanTimingEnabled()) { // TEMPORARY timing
++            auto &scan = ScanSide();
++            std::lock_guard<std::mutex> lock(scan.mutex);
++            scan.fetch_calls++;
++            scan.fetch_call_seconds += WallNow() - fetch_started;
++        }
++        if (!more) {
+             return;
+         }
+     }
+@@ -189,6 +433,8 @@ void AdbcScanFunction(ClientContext &context, TableFunctionInput &input, DataChu
+ 
+     // Handle the case where we don't need all of the columns
+     auto is_projected = function_data.adbc_arrow_stream_factory->CanPushdownProjections();
++    auto convert_started = ScanTimingEnabled() ? WallNow() : 0;        // TEMPORARY timing
++    auto convert_cpu_started = ScanTimingEnabled() ? ThreadCpuNow() : 0; // TEMPORARY timing
+     if (global_state.CanRemoveFilterColumns() && !is_projected) {
+         local_state.all_columns.Reset();
+         local_state.all_columns.SetChildCardinality(output_size);
+@@ -202,6 +448,14 @@ void AdbcScanFunction(ClientContext &context, TableFunctionInput &input, DataChu
+         output.SetChildCardinality(output_size);
+         ArrowTableFunction::ArrowToDuckDB(local_state, function_data.arrow_table.GetColumns(), output, is_projected);
+     }
++    if (ScanTimingEnabled()) { // TEMPORARY timing
++        auto &scan = ScanSide();
++        std::lock_guard<std::mutex> lock(scan.mutex);
++        scan.convert_calls++;
++        scan.convert_seconds += WallNow() - convert_started;
++        scan.convert_cpu_seconds += ThreadCpuNow() - convert_cpu_started;
++        scan.convert_threads.insert(std::this_thread::get_id());
++    }
+ 
+     output.Verify();
+     local_state.chunk_offset += output.size();

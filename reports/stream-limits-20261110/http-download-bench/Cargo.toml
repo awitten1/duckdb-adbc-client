@@ -1,0 +1,17 @@
+[package]
+name = "http-download-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Versions pinned to those in adbc_clickhouse's Cargo.lock.
+[dependencies]
+bytes = "1"
+clickhouse = "=0.15.2"
+http-body-util = "0.1"
+hyper = { version = "=1.10.1", features = ["client", "http1"] }
+hyper-util = { version = "=0.1.20", features = ["client-legacy", "http1", "tokio"] }
+tokio = { version = "1.48", features = ["rt", "rt-multi-thread"] }
+
+[profile.release]
+debug = 1

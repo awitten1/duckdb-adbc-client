@@ -1,0 +1,47 @@
+Output of scripts/format_processors.sh (2026-11-11), modified ClickHouse 26.11.1.1, one raw curl download per run.
+Run names are <output format>-cpu<curl CPU>; CPU 9 is on ClickHouse's socket, CPU 19 on the other.
+
+fmtproc64531969-Null-cpu9: curl wall 2.401463 s, 0 bytes
+fmtproc64531969-Native-cpu9: curl wall 7.742614 s, 8019182755 bytes
+fmtproc64531969-ArrowStream-cpu9: curl wall 7.352342 s, 9673331584 bytes
+fmtproc64531969-Null-cpu19: curl wall 2.357612 s, 0 bytes
+fmtproc64531969-Native-cpu19: curl wall 9.760314 s, 8019182755 bytes
+fmtproc64531969-ArrowStream-cpu19: curl wall 9.893054 s, 9673331584 bytes
+
+=== query_log (server-side wall, CPU, socket send)
+   ┌─run───────────────┬─server_wall_s─┬─server_cpu_s─┬─send_blocked_s─┬─sent_gb─┐
+1. │ Null-cpu9         │           2.4 │        36.83 │              0 │       0 │
+2. │ Native-cpu9       │          7.74 │         28.8 │            2.8 │    8.02 │
+3. │ ArrowStream-cpu9  │          7.35 │        28.47 │           3.49 │    9.67 │
+4. │ Null-cpu19        │          2.36 │        36.87 │              0 │       0 │
+5. │ Native-cpu19      │          9.76 │        30.79 │            4.8 │    8.02 │
+6. │ ArrowStream-cpu19 │          9.89 │        30.99 │           5.93 │    9.67 │
+   └───────────────────┴───────────────┴──────────────┴────────────────┴─────────┘
+
+=== processors_profile_log, summed over processor instances (seconds)
+    ┌─run───────────────┬─name───────────────────────────────────────────────┬──n─┬─busy_sum─┬─busy_max─┬─in_wait_max─┬─out_wait_max─┐
+ 1. │ ArrowStream-cpu19 │ MergeTreeSelect(pool: ReadPool, algorithm: Thread) │ 32 │    21.26 │     0.67 │           0 │         9.21 │
+ 2. │ ArrowStream-cpu19 │ ArrowIPCBlockOutputFormat                          │  1 │     9.33 │     9.33 │        0.54 │            0 │
+ 3. │ ArrowStream-cpu19 │ MaterializingTransform                             │  1 │     0.13 │     0.13 │        0.38 │         9.36 │
+ 4. │ ArrowStream-cpu19 │ ExpressionTransform                                │ 64 │     0.07 │        0 │        0.68 │         9.21 │
+ 5. │ ArrowStream-cpu9  │ MergeTreeSelect(pool: ReadPool, algorithm: Thread) │ 32 │    21.23 │     0.67 │           0 │         6.67 │
+ 6. │ ArrowStream-cpu9  │ ArrowIPCBlockOutputFormat                          │  1 │     6.86 │     6.86 │        0.47 │            0 │
+ 7. │ ArrowStream-cpu9  │ MaterializingTransform                             │  1 │     0.13 │     0.13 │        0.32 │         6.89 │
+ 8. │ ArrowStream-cpu9  │ ExpressionTransform                                │ 64 │     0.06 │        0 │        0.68 │         6.67 │
+ 9. │ Native-cpu19      │ MergeTreeSelect(pool: ReadPool, algorithm: Thread) │ 32 │    21.17 │     0.67 │           0 │         9.09 │
+10. │ Native-cpu19      │ Native                                             │  1 │     9.19 │     9.19 │        0.55 │            0 │
+11. │ Native-cpu19      │ MaterializingTransform                             │  1 │     0.13 │     0.13 │        0.39 │         9.22 │
+12. │ Native-cpu19      │ ExpressionTransform                                │ 64 │     0.07 │        0 │        0.67 │         9.08 │
+13. │ Native-cpu9       │ MergeTreeSelect(pool: ReadPool, algorithm: Thread) │ 32 │    21.17 │     0.67 │           0 │         7.07 │
+14. │ Native-cpu9       │ Native                                             │  1 │      7.2 │      7.2 │        0.52 │            0 │
+15. │ Native-cpu9       │ MaterializingTransform                             │  1 │     0.14 │     0.14 │        0.36 │         7.23 │
+16. │ Native-cpu9       │ ExpressionTransform                                │ 64 │     0.07 │        0 │        0.68 │         7.06 │
+17. │ Null-cpu19        │ MergeTreeSelect(pool: ReadPool, algorithm: Thread) │ 32 │    68.06 │     2.17 │           0 │         0.19 │
+18. │ Null-cpu19        │ MaterializingTransform                             │  1 │      0.2 │      0.2 │        1.92 │         0.22 │
+19. │ Null-cpu19        │ Null                                               │  1 │      0.2 │      0.2 │        2.14 │            0 │
+20. │ Null-cpu19        │ ExpressionTransform                                │ 64 │     0.14 │     0.01 │        2.19 │         0.18 │
+21. │ Null-cpu9         │ MergeTreeSelect(pool: ReadPool, algorithm: Thread) │ 32 │    67.99 │     2.18 │           0 │         0.22 │
+22. │ Null-cpu9         │ Null                                               │  1 │     0.22 │     0.22 │        2.16 │            0 │
+23. │ Null-cpu9         │ MaterializingTransform                             │  1 │      0.2 │      0.2 │        1.94 │         0.24 │
+24. │ Null-cpu9         │ ExpressionTransform                                │ 64 │     0.14 │     0.01 │        2.21 │         0.18 │
+    └───────────────────┴────────────────────────────────────────────────────┴────┴──────────┴──────────┴─────────────┴──────────────┘

@@ -1,0 +1,35 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index c022360..9320cdc 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -60,7 +60,7 @@ features = ["serde"]
+ 
+ [dependencies.tokio]
+ version = "1.48.0"
+-features = ["rt"]
++features = ["rt", "rt-multi-thread"]
+ 
+ [dependencies.uuid]
+ version = "1.23.3"
+@@ -77,3 +77,6 @@ adbc_driver_manager = "0.23.0"
+ [dev-dependencies.tokio]
+ version = "1"
+ features = ["rt-multi-thread", "macros"]
++
++[patch.crates-io]
++clickhouse-ext-arrow = { path = "../patched-crates/clickhouse-ext-arrow" }
+diff --git a/src/lib.rs b/src/lib.rs
+index 160f304..2020ad5 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -955,7 +955,9 @@ enum TokioContext {
+ 
+ impl TokioContext {
+     fn new_current_thread() -> Result<Self> {
+-        let rt = tokio::runtime::Builder::new_current_thread()
++        // EXPERIMENT: worker threads keep reading HTTP responses while the caller decodes.
++        let rt = tokio::runtime::Builder::new_multi_thread()
++            .worker_threads(2)
+             .enable_all()
+             .build()
+             .map_err(|e| {

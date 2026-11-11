@@ -1,0 +1,183 @@
+diff --git a/src/function/table/arrow_conversion.cpp b/src/function/table/arrow_conversion.cpp
+index 89a30178f6c..1e0c6c27bfa 100644
+--- a/src/function/table/arrow_conversion.cpp
++++ b/src/function/table/arrow_conversion.cpp
+@@ -341,19 +341,71 @@ static void ArrowToDuckDBMapVerify(const Vector &vector, idx_t count) {
+ 	}
+ }
+ 
++#if !defined(DUCKDB_DEBUG_NO_INLINE) && !DUCKDB_IS_BIG_ENDIAN
++//! Writes a string_t that references (or inlines) Arrow string data directly into its destination with two
++//! 8-byte stores. The string_t constructor assembles the value in a temporary that is then copied out with one
++//! 16-byte load; on x86 that load cannot be forwarded from the preceding narrower stores and stalls on every row.
++//! Inline strings are read with fixed-width loads when those stay before `limit`, the end of the string data.
++static inline void WriteArrowString(string_t &target, const char *cptr, uint32_t len, const char *limit) {
++	uint64_t head; // length, then the prefix or the first four inlined bytes
++	uint64_t tail; // pointer, or inlined bytes 4-11
++	if (len > string_t::INLINE_LENGTH) {
++		uint32_t prefix;
++		memcpy(&prefix, cptr, sizeof(prefix));
++		head = uint64_t(len) | (uint64_t(prefix) << 32);
++		tail = uint64_t(reinterpret_cast<uintptr_t>(cptr));
++	} else if (limit - cptr >= static_cast<int64_t>(string_t::INLINE_LENGTH)) {
++		uint32_t first;
++		uint64_t rest;
++		memcpy(&first, cptr, sizeof(first));
++		memcpy(&rest, cptr + sizeof(first), sizeof(rest));
++		// Inlined strings are zero padded: clear the bytes after the string.
++		auto first_bytes = MinValue<uint32_t>(len, 4);
++		auto rest_bytes = len > 4 ? len - 4 : 0;
++		uint32_t first_mask = first_bytes == 4 ? ~uint32_t(0) : (uint32_t(1) << (8 * first_bytes)) - 1;
++		uint64_t rest_mask = rest_bytes == 8 ? ~uint64_t(0) : (uint64_t(1) << (8 * rest_bytes)) - 1;
++		head = uint64_t(len) | (uint64_t(first & first_mask) << 32);
++		tail = rest & rest_mask;
++	} else {
++		// Too close to the end of the string data for fixed-width loads.
++		target = string_t(cptr, len);
++		return;
++	}
++	auto destination = reinterpret_cast<data_ptr_t>(&target);
++	memcpy(destination, &head, sizeof(head));
++	memcpy(destination + sizeof(head), &tail, sizeof(tail));
++}
++#endif
++
++//! `limit` is the end of the array's string data (the final offset), which bounds fixed-width reads.
+ template <class T>
+-static void SetVectorString(Vector &vector, idx_t size, char *cdata, T *offsets) {
++static void SetVectorString(Vector &vector, idx_t size, char *cdata, T *offsets, const char *limit) {
+ 	auto strings = FlatVector::GetDataMutable<string_t>(vector);
+-	for (idx_t row_idx = 0; row_idx < size; row_idx++) {
+-		if (FlatVector::IsNull(vector, row_idx)) {
+-			continue;
+-		}
++	// Read the validity mask once: looking it up per row is a virtual call.
++	auto &validity = FlatVector::Validity(vector);
++	auto convert = [&](idx_t row_idx) {
+ 		auto cptr = cdata + offsets[row_idx];
+ 		auto str_len = offsets[row_idx + 1] - offsets[row_idx];
+ 		if (str_len > NumericLimits<uint32_t>::Maximum()) { // LCOV_EXCL_START
+ 			throw ConversionException("DuckDB does not support Strings over 4GB");
+ 		} // LCOV_EXCL_STOP
++#if !defined(DUCKDB_DEBUG_NO_INLINE) && !DUCKDB_IS_BIG_ENDIAN
++		WriteArrowString(strings[row_idx], cptr, UnsafeNumericCast<uint32_t>(str_len), limit);
++#else
++		(void)limit;
+ 		strings[row_idx] = string_t(cptr, UnsafeNumericCast<uint32_t>(str_len));
++#endif
++	};
++	if (validity.CannotHaveNull()) {
++		for (idx_t row_idx = 0; row_idx < size; row_idx++) {
++			convert(row_idx);
++		}
++	} else {
++		for (idx_t row_idx = 0; row_idx < size; row_idx++) {
++			if (validity.RowIsValidUnsafe(row_idx)) {
++				convert(row_idx);
++			}
++		}
+ 	}
+ }
+ 
+@@ -757,6 +809,29 @@ void ArrowToDuckDBConversion::ColumnArrowToDuckDBRunEndEncoded(Vector &vector, c
+ 		throw NotImplementedException("Type '%s' not implemented for RunEndEncoding", TypeIdToString(physical_type));
+ 	}
+ }
++//! Arrow's decimal precision bounds every value to DuckDB's physical width for that precision, so narrowing keeps
++//! the low-order bits (previously a TryCast whose failure was only asserted).
++template <class TGT>
++static inline TGT DecimalToPhysical(int32_t value) {
++	return static_cast<TGT>(value);
++}
++template <class TGT>
++static inline TGT DecimalToPhysical(int64_t value) {
++	return static_cast<TGT>(value);
++}
++template <class TGT>
++static inline TGT DecimalToPhysical(hugeint_t value) {
++	return static_cast<TGT>(static_cast<int64_t>(value.lower));
++}
++
++//! Converts every row, NULL rows included (their values are never read), so the loop has no branches.
++template <class SRC, class TGT>
++static void NarrowDecimal(const SRC *src_ptr, TGT *tgt_ptr, idx_t size) {
++	for (idx_t row = 0; row < size; row++) {
++		tgt_ptr[row] = DecimalToPhysical<TGT>(src_ptr[row]);
++	}
++}
++
+ template <class SRC>
+ void ConvertDecimal(SRC src_ptr, Vector &vector, ArrowArray &array, idx_t size, int64_t nested_offset,
+                     uint64_t parent_offset, idx_t chunk_offset, ValidityMask &val_mask,
+@@ -764,13 +839,7 @@ void ConvertDecimal(SRC src_ptr, Vector &vector, ArrowArray &array, idx_t size,
+ 	switch (vector.GetType().InternalType()) {
+ 	case PhysicalType::INT16: {
+ 		auto tgt_ptr = FlatVector::GetDataMutable<int16_t>(vector);
+-		for (idx_t row = 0; row < size; row++) {
+-			if (val_mask.RowIsValid(row)) {
+-				auto result = TryCast::Operation(src_ptr[row], tgt_ptr[row]);
+-				D_ASSERT(result);
+-				(void)result;
+-			}
+-		}
++		NarrowDecimal(src_ptr, tgt_ptr, size);
+ 		break;
+ 	}
+ 	case PhysicalType::INT32: {
+@@ -781,13 +850,7 @@ void ConvertDecimal(SRC src_ptr, Vector &vector, ArrowArray &array, idx_t size,
+ 			FlatVector::SetData(vector, data, count_t(size));
+ 		} else {
+ 			auto tgt_ptr = FlatVector::GetDataMutable<int32_t>(vector);
+-			for (idx_t row = 0; row < size; row++) {
+-				if (val_mask.RowIsValid(row)) {
+-					auto result = TryCast::Operation(src_ptr[row], tgt_ptr[row]);
+-					D_ASSERT(result);
+-					(void)result;
+-				}
+-			}
++			NarrowDecimal(src_ptr, tgt_ptr, size);
+ 		}
+ 		break;
+ 	}
+@@ -799,13 +862,7 @@ void ConvertDecimal(SRC src_ptr, Vector &vector, ArrowArray &array, idx_t size,
+ 			FlatVector::SetData(vector, data, count_t(size));
+ 		} else {
+ 			auto tgt_ptr = FlatVector::GetDataMutable<int64_t>(vector);
+-			for (idx_t row = 0; row < size; row++) {
+-				if (val_mask.RowIsValid(row)) {
+-					auto result = TryCast::Operation(src_ptr[row], tgt_ptr[row]);
+-					D_ASSERT(result);
+-					(void)result;
+-				}
+-			}
++			NarrowDecimal(src_ptr, tgt_ptr, size);
+ 		}
+ 		break;
+ 	}
+@@ -918,16 +975,20 @@ void ArrowToDuckDBConversion::ColumnArrowToDuckDB(Vector &vector, ArrowArray &ar
+ 		switch (size_type) {
+ 		case ArrowVariableSizeType::SUPER_SIZE: {
+ 			auto cdata = ArrowBufferData<char>(array, 2);
+-			auto offsets = ArrowBufferData<uint64_t>(array, 1) +
+-			               GetEffectiveOffset(array, NumericCast<int64_t>(parent_offset), chunk_offset, nested_offset);
+-			SetVectorString(vector, size, cdata, offsets);
++			auto all_offsets = ArrowBufferData<uint64_t>(array, 1);
++			auto offsets =
++			    all_offsets + GetEffectiveOffset(array, NumericCast<int64_t>(parent_offset), chunk_offset, nested_offset);
++			auto limit = cdata + all_offsets[array.offset + array.length];
++			SetVectorString(vector, size, cdata, offsets, limit);
+ 			break;
+ 		}
+ 		case ArrowVariableSizeType::NORMAL: {
+ 			auto cdata = ArrowBufferData<char>(array, 2);
+-			auto offsets = ArrowBufferData<uint32_t>(array, 1) +
+-			               GetEffectiveOffset(array, NumericCast<int64_t>(parent_offset), chunk_offset, nested_offset);
+-			SetVectorString(vector, size, cdata, offsets);
++			auto all_offsets = ArrowBufferData<uint32_t>(array, 1);
++			auto offsets =
++			    all_offsets + GetEffectiveOffset(array, NumericCast<int64_t>(parent_offset), chunk_offset, nested_offset);
++			auto limit = cdata + all_offsets[array.offset + array.length];
++			SetVectorString(vector, size, cdata, offsets, limit);
+ 			break;
+ 		}
+ 		case ArrowVariableSizeType::VIEW: {

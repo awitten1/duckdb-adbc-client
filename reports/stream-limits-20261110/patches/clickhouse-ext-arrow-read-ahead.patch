@@ -1,0 +1,102 @@
+Subject: [PATCH] EXPERIMENT: read the HTTP body ahead of the Arrow decoder
+
+---
+ Cargo.toml |  4 ++++
+ src/lib.rs | 41 ++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 40 insertions(+), 5 deletions(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 3a7380d..fe2b3c5 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -51,6 +51,10 @@ version = "0.15.1"
+ 
+ [dependencies.tokio]
+ version = "1"
++features = ["rt", "sync"]
+ 
+ [dependencies.tracing]
+ version = "0.1"
++
++[dependencies.bytes]
++version = "1"
+diff --git a/src/lib.rs b/src/lib.rs
+index 35fb35f..395550e 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -117,12 +117,14 @@ pub trait ArrowQueryExt {
+ impl ArrowQueryExt for Query {
+     fn fetch_arrow(self) -> Result<ArrowCursor, Error> {
+         Ok(ArrowCursor {
+-            cursor: self
++            cursor: Some(self
+                 // Prevent ClickHouse from double-compressing
+                 .with_setting("output_format_arrow_compression_method", "none")
+                 // Add specific product info to let us track Arrow adoption
+                 .with_product_info("clickhouse-ext-arrow", _priv::CARGO_PKG_VERSION)
+-                .fetch_bytes("ArrowStream")?,
++                .fetch_bytes("ArrowStream")?),
++            read_ahead: None,
++            span: tracing::Span::none(),
+             buffer: Buffer::default(),
+             decoder: StreamDecoder::new(),
+         })
+@@ -372,11 +374,17 @@ impl Write for InsertWriter {
+ /// Any [`ArrowError`][arrow_schema::ArrowError]s are wrapped as [`Error::Other`].
+ #[must_use = "the query is not sent until `.next().await`"]
+ pub struct ArrowCursor {
+-    cursor: BytesCursor,
++    // EXPERIMENT: the HTTP body moves into a read-ahead task on the first poll.
++    cursor: Option<BytesCursor>,
++    read_ahead: Option<tokio::sync::mpsc::Receiver<Result<bytes::Bytes, Error>>>,
++    span: tracing::Span,
+     buffer: Buffer,
+     decoder: StreamDecoder,
+ }
+ 
++/// HTTP body chunks (typically 0.4-1 MiB) buffered ahead of the decoder.
++const READ_AHEAD_CHUNKS: usize = 64;
++
+ impl ArrowCursor {
+     /// Return the response schema if it is available.
+     ///
+@@ -393,11 +401,34 @@ impl ArrowCursor {
+         &mut self,
+         cx: &mut Context<'_>,
+     ) -> Poll<Result<Option<RecordBatch>, Error>> {
+-        let _span = self.cursor._priv_span().clone().entered();
++        if let Some(mut cursor) = self.cursor.take() {
++            // Keep reading the socket while this thread decodes: drain the body on another task.
++            self.span = cursor._priv_span().clone();
++            let (tx, rx) = tokio::sync::mpsc::channel(READ_AHEAD_CHUNKS);
++            tokio::spawn(async move {
++                loop {
++                    match std::future::poll_fn(|cx| cursor.poll_next(cx)).await {
++                        Ok(Some(bytes)) => {
++                            if tx.send(Ok(bytes)).await.is_err() {
++                                break; // the ArrowCursor was dropped
++                            }
++                        }
++                        Ok(None) => break,
++                        Err(error) => {
++                            let _ = tx.send(Err(error)).await;
++                            break;
++                        }
++                    }
++                }
++            });
++            self.read_ahead = Some(rx);
++        }
++        let _span = self.span.clone().entered();
+ 
+         loop {
+             if self.buffer.is_empty() {
+-                if let Some(bytes) = ready!(self.cursor.poll_next(cx))? {
++                let next = ready!(self.read_ahead.as_mut().expect("read-ahead started").poll_recv(cx));
++                if let Some(bytes) = next.transpose()? {
+                     self.buffer = bytes.into();
+                     continue;
+                 }
+-- 
+2.43.0
+

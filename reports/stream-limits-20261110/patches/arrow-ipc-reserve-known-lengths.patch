@@ -1,0 +1,36 @@
+Subject: [PATCH] StreamDecoder: reserve known message and body lengths
+
+---
+ src/reader/stream.rs | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/reader/stream.rs b/src/reader/stream.rs
+index bfecf7b..f7dccb8 100644
+--- a/src/reader/stream.rs
++++ b/src/reader/stream.rs
+@@ -193,6 +193,10 @@ impl StreamDecoder {
+                         continue;
+                     }
+ 
++                    if self.buf.is_empty() {
++                        // The message length is known: allocate it once instead of growing by doubling.
++                        self.buf.reserve(len);
++                    }
+                     let to_read = buffer.len().min(len - self.buf.len());
+                     self.buf.extend_from_slice(&buffer[..to_read]);
+                     buffer.advance(to_read);
+@@ -210,6 +214,11 @@ impl StreamDecoder {
+                         buffer.advance(body_length);
+                         body
+                     } else {
++                        if self.buf.is_empty() {
++                            // The body length is known from the header: allocate it once, so a body that
++                            // spans several input buffers is copied once instead of re-copied on each growth.
++                            self.buf.reserve(body_length);
++                        }
+                         let to_read = buffer.len().min(body_length - self.buf.len());
+                         self.buf.extend_from_slice(&buffer[..to_read]);
+                         buffer.advance(to_read);
+-- 
+2.43.0
+

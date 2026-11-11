@@ -1,0 +1,98 @@
+Output of scripts/sort_processors.sh (2026-11-11), modified ClickHouse 26.11.1.1, one raw curl download per run.
+Run names are <ORDER BY>-<output format>-cpu<curl CPU>; CPU 9 is on ClickHouse's socket, CPU 19 on the other.
+
+nosort-Null-cpu9: curl wall 2.401401 s, 0 bytes
+nosort-ArrowStream-cpu9: curl wall 7.331167 s, 9673331584 bytes
+orderkey-Null-cpu9: curl wall 16.895112 s, 0 bytes
+orderkey-ArrowStream-cpu9: curl wall 17.196086 s, 9673333512 bytes
+custkey-Null-cpu9: curl wall 38.433331 s, 0 bytes
+custkey-ArrowStream-cpu9: curl wall 39.648606 s, 9668277000 bytes
+nosort-Null-cpu19: curl wall 2.552717 s, 0 bytes
+nosort-ArrowStream-cpu19: curl wall 9.792466 s, 9673331584 bytes
+orderkey-Null-cpu19: curl wall 16.898704 s, 0 bytes
+orderkey-ArrowStream-cpu19: curl wall 17.176418 s, 9673333512 bytes
+custkey-Null-cpu19: curl wall 38.042331 s, 0 bytes
+custkey-ArrowStream-cpu19: curl wall 39.979357 s, 9668276992 bytes
+
+=== query_log
+    ┌─run────────────────────────┬─wall_s─┬──cpu_s─┬─send_blocked_s─┬─sent_gb─┬─peak_mem───┐
+ 1. │ nosort-Null-cpu9           │    2.4 │  36.91 │              0 │       0 │ 95.18 MiB  │
+ 2. │ nosort-ArrowStream-cpu9    │   7.33 │  28.45 │           3.49 │    9.67 │ 54.86 MiB  │
+ 3. │ orderkey-Null-cpu9         │   16.9 │  20.43 │              0 │       0 │ 670.76 MiB │
+ 4. │ orderkey-ArrowStream-cpu9  │   17.2 │  26.13 │           3.36 │    9.67 │ 671.66 MiB │
+ 5. │ custkey-Null-cpu9          │  38.44 │ 190.77 │              0 │       0 │ 10.42 GiB  │
+ 6. │ custkey-ArrowStream-cpu9   │  39.65 │ 177.41 │            3.4 │    9.67 │ 10.44 GiB  │
+ 7. │ nosort-Null-cpu19          │   2.55 │  38.02 │              0 │       0 │ 113.21 MiB │
+ 8. │ nosort-ArrowStream-cpu19   │   9.79 │  30.69 │           5.89 │    9.67 │ 47.75 MiB  │
+ 9. │ orderkey-Null-cpu19        │   16.9 │  20.51 │              0 │       0 │ 676.86 MiB │
+10. │ orderkey-ArrowStream-cpu19 │  17.18 │  28.89 │           6.01 │    9.67 │ 645.49 MiB │
+11. │ custkey-Null-cpu19         │  38.04 │ 183.39 │              0 │       0 │ 10.42 GiB  │
+12. │ custkey-ArrowStream-cpu19  │  39.98 │ 182.51 │           5.75 │    9.67 │ 10.44 GiB  │
+    └────────────────────────────┴────────┴────────┴────────────────┴─────────┴────────────┘
+
+=== processors_profile_log, per processor name (seconds; max is over instances)
+    ┌─run────────────────────────┬─name───────────────────────────────────────────────────────┬──n─┬─busy_sum─┬─busy_max─┬─in_wait_max─┬─out_wait_max─┐
+ 1. │ nosort-Null-cpu9           │ MergeTreeSelect(pool: ReadPool, algorithm: Thread)         │ 32 │    67.88 │     2.19 │           0 │         0.22 │
+ 2. │ nosort-Null-cpu9           │ Null                                                       │  1 │     0.22 │     0.22 │        2.16 │            0 │
+ 3. │ nosort-Null-cpu9           │ MaterializingTransform                                     │  1 │      0.2 │      0.2 │        1.93 │         0.25 │
+ 4. │ nosort-Null-cpu9           │ ExpressionTransform                                        │ 64 │     0.17 │     0.02 │        2.21 │         0.21 │
+ 5. │ nosort-ArrowStream-cpu9    │ ArrowIPCBlockOutputFormat                                  │  1 │     6.85 │     6.85 │        0.46 │            0 │
+ 6. │ nosort-ArrowStream-cpu9    │ MergeTreeSelect(pool: ReadPool, algorithm: Thread)         │ 32 │    21.18 │     0.67 │           0 │         6.65 │
+ 7. │ nosort-ArrowStream-cpu9    │ MaterializingTransform                                     │  1 │     0.13 │     0.13 │         0.3 │         6.88 │
+ 8. │ orderkey-Null-cpu9         │ MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrder) │ 36 │    20.88 │     0.72 │           0 │        15.48 │
+ 9. │ orderkey-Null-cpu9         │ MergingSortedTransform                                     │  1 │     0.24 │     0.24 │       16.25 │         0.01 │
+10. │ orderkey-Null-cpu9         │ Null                                                       │  1 │     0.13 │     0.13 │       16.75 │            0 │
+11. │ orderkey-Null-cpu9         │ ExpressionTransform                                        │ 73 │      0.1 │     0.04 │       16.63 │        16.67 │
+12. │ orderkey-ArrowStream-cpu9  │ ArrowIPCBlockOutputFormat                                  │  1 │     5.48 │     5.48 │       11.69 │            0 │
+13. │ orderkey-ArrowStream-cpu9  │ MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrder) │ 36 │    21.77 │     0.72 │           0 │        15.73 │
+14. │ orderkey-ArrowStream-cpu9  │ MergingSortedTransform                                     │  1 │     0.23 │     0.23 │       15.93 │          0.6 │
+15. │ orderkey-ArrowStream-cpu9  │ ExpressionTransform                                        │ 73 │      0.1 │     0.04 │       11.56 │        16.97 │
+16. │ custkey-Null-cpu9          │ MergingSortedTransform                                     │  1 │    33.76 │    33.76 │         4.6 │            0 │
+17. │ custkey-Null-cpu9          │ MergeSortingTransform                                      │ 32 │    100.8 │     3.67 │        4.31 │        31.94 │
+18. │ custkey-Null-cpu9          │ MergeTreeSelect(pool: ReadPool, algorithm: Thread)         │ 32 │    87.02 │     2.91 │           0 │         1.47 │
+19. │ custkey-Null-cpu9          │ PartialSortingTransform                                    │ 32 │    43.42 │     1.44 │        2.92 │         0.01 │
+20. │ custkey-Null-cpu9          │ Null                                                       │  1 │     0.03 │     0.03 │       38.39 │            0 │
+21. │ custkey-Null-cpu9          │ ExpressionTransform                                        │ 65 │     0.24 │     0.02 │       38.29 │         1.46 │
+22. │ custkey-ArrowStream-cpu9   │ MergingSortedTransform                                     │  1 │    34.68 │    34.68 │        4.43 │         0.48 │
+23. │ custkey-ArrowStream-cpu9   │ ArrowIPCBlockOutputFormat                                  │  1 │      6.1 │      6.1 │       33.53 │            0 │
+24. │ custkey-ArrowStream-cpu9   │ MergeSortingTransform                                      │ 32 │    79.76 │     2.99 │        4.24 │        33.56 │
+25. │ custkey-ArrowStream-cpu9   │ MergeTreeSelect(pool: ReadPool, algorithm: Thread)         │ 32 │    83.79 │     2.79 │           0 │         1.48 │
+26. │ custkey-ArrowStream-cpu9   │ PartialSortingTransform                                    │ 32 │    42.27 │     1.45 │        2.81 │         0.02 │
+27. │ custkey-ArrowStream-cpu9   │ ExpressionTransform                                        │ 65 │     0.23 │     0.02 │       33.44 │         6.12 │
+28. │ nosort-Null-cpu19          │ MergeTreeSelect(pool: ReadPool, algorithm: Thread)         │ 32 │    70.94 │     2.28 │           0 │         0.29 │
+29. │ nosort-Null-cpu19          │ Null                                                       │  1 │     0.25 │     0.25 │        2.29 │            0 │
+30. │ nosort-Null-cpu19          │ MaterializingTransform                                     │  1 │     0.22 │     0.22 │        2.04 │         0.27 │
+31. │ nosort-Null-cpu19          │ ExpressionTransform                                        │ 64 │     0.18 │     0.01 │         2.3 │         0.28 │
+32. │ nosort-ArrowStream-cpu19   │ ArrowIPCBlockOutputFormat                                  │  1 │     9.22 │     9.22 │        0.55 │            0 │
+33. │ nosort-ArrowStream-cpu19   │ MergeTreeSelect(pool: ReadPool, algorithm: Thread)         │ 32 │    21.01 │     0.67 │           0 │         9.12 │
+34. │ nosort-ArrowStream-cpu19   │ MaterializingTransform                                     │  1 │     0.13 │     0.13 │        0.39 │         9.25 │
+35. │ orderkey-Null-cpu19        │ MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrder) │ 36 │    21.93 │     0.75 │           0 │        15.55 │
+36. │ orderkey-Null-cpu19        │ MergingSortedTransform                                     │  1 │     0.24 │     0.24 │       16.24 │         0.01 │
+37. │ orderkey-Null-cpu19        │ Null                                                       │  1 │     0.13 │     0.13 │       16.75 │            0 │
+38. │ orderkey-Null-cpu19        │ ExpressionTransform                                        │ 73 │      0.1 │     0.04 │       16.64 │        16.68 │
+39. │ orderkey-ArrowStream-cpu19 │ ArrowIPCBlockOutputFormat                                  │  1 │     8.26 │     8.26 │        8.89 │            0 │
+40. │ orderkey-ArrowStream-cpu19 │ MergeTreeSelect(pool: ReadPoolInOrder, algorithm: InOrder) │ 36 │    21.54 │     0.73 │           0 │        15.72 │
+41. │ orderkey-ArrowStream-cpu19 │ MergingSortedTransform                                     │  1 │     0.23 │     0.23 │       15.45 │         1.09 │
+42. │ orderkey-ArrowStream-cpu19 │ ExpressionTransform                                        │ 73 │      0.1 │     0.04 │        8.75 │        16.95 │
+43. │ custkey-Null-cpu19         │ MergingSortedTransform                                     │  1 │    33.37 │    33.37 │         4.6 │            0 │
+44. │ custkey-Null-cpu19         │ MergeSortingTransform                                      │ 32 │    92.39 │     3.35 │        4.33 │        31.35 │
+45. │ custkey-Null-cpu19         │ MergeTreeSelect(pool: ReadPool, algorithm: Thread)         │ 32 │    87.33 │     2.89 │           0 │         1.45 │
+46. │ custkey-Null-cpu19         │ PartialSortingTransform                                    │ 32 │    42.97 │     1.43 │         2.9 │         0.02 │
+47. │ custkey-Null-cpu19         │ Null                                                       │  1 │     0.03 │     0.03 │       38.00 │            0 │
+48. │ custkey-Null-cpu19         │ ExpressionTransform                                        │ 65 │     0.24 │     0.02 │       37.91 │         1.44 │
+49. │ custkey-ArrowStream-cpu19  │ MergingSortedTransform                                     │  1 │    34.74 │    34.74 │        4.43 │         0.74 │
+50. │ custkey-ArrowStream-cpu19  │ ArrowIPCBlockOutputFormat                                  │  1 │     8.45 │     8.45 │       31.51 │            0 │
+51. │ custkey-ArrowStream-cpu19  │ MergeSortingTransform                                      │ 32 │    83.68 │     3.43 │         4.2 │        33.83 │
+52. │ custkey-ArrowStream-cpu19  │ MergeTreeSelect(pool: ReadPool, algorithm: Thread)         │ 32 │    83.31 │     2.82 │           0 │         1.41 │
+53. │ custkey-ArrowStream-cpu19  │ PartialSortingTransform                                    │ 32 │    41.54 │      1.4 │        2.83 │         0.02 │
+54. │ custkey-ArrowStream-cpu19  │ ExpressionTransform                                        │ 65 │     0.23 │     0.02 │       31.42 │         8.47 │
+    └────────────────────────────┴────────────────────────────────────────────────────────────┴────┴──────────┴──────────┴─────────────┴──────────────┘
+
+=== Active parts of tpch_sf50.orders (SELECT _part, count(), min(o_orderkey), max(o_orderkey) ... GROUP BY _part)
+   ┌─_part─────┬─────rows─┬───min_key─┬───max_key─┐
+1. │ all_1_1_0 │ 46323711 │         1 │ 185294823 │
+2. │ all_2_2_0 │  9926840 │ 185294848 │ 260296451 │
+3. │ all_3_3_0 │  6617673 │ 202941958 │ 273530469 │
+4. │ all_4_4_0 │  6617673 │ 216178629 │ 286767140 │
+5. │ all_5_5_0 │  5514103 │ 229412647 │ 300000000 │
+   └───────────┴──────────┴───────────┴───────────┘

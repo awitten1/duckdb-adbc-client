@@ -8,6 +8,8 @@
 - [CloudLab rerun of the SF5, SF10, and SF50 reports, with alpha charts for every key](./cloudlab-repro-20261110/README.md)
 - [lineitem SF5, SF10, and SF25 alpha and sort-key results on CloudLab](./lineitem-20261110/README.md)
 - [Parallel ADBC streams: packaged vs modified ClickHouse, stream count vs runtime](./parallel-streams-20261110/README.md)
+- [What limits ADBC streams from the modified ClickHouse: output stage, connector, conversion, transfer](./stream-limits-20261110/README.md)
+- [Sorting in ClickHouse, one stream and many: per-stream ORDER BY vs stream count](./sorted-streams-20261111/README.md)
 
 These reports and chart assets are tracked in Git. Raw DuckDB profiles,
 ClickHouse data, Parquet exports, and machine-specific logs remain under the
