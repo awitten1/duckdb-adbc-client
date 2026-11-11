@@ -1,0 +1,16 @@
+Output of scripts/pin_frequency.sh on each node (2026-11-11), before the experiment.
+
+## ms1011 (ClickHouse)
+before: driver=intel_cpufreq governor=schedutil no_turbo=0 min=800000 max=2600000
+after:  governor=performance no_turbo=1 min=2000000 max=2000000
+under load: 1.91 GHz average per CPU (16 CPUs busy for 3 s)
+idle: all 16 CPUs reported 1992.9-2000.0 MHz
+
+## ms1006 (DuckDB)
+before: driver=intel_cpufreq governor=schedutil no_turbo=0 min=800000 max=2600000
+after:  governor=performance no_turbo=1 min=2000000 max=2000000
+under load: 2.02 GHz average per CPU (16 CPUs busy for 3 s)
+idle: all 16 CPUs reported 1995.3-1995.4 MHz
+
+(The load measurement divides perf's cycle count by 16 CPUs x 3 s, so the start-up of the busy loops inside the
+window pulls the ms1011 figure slightly below the pinned 2.0 GHz.)

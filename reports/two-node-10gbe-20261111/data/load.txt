@@ -1,0 +1,18 @@
+Loading "tpch_sf50"."customer": 7,500,000 rows
+Verified "tpch_sf50"."customer": 7,500,000 rows
+Loading "tpch_sf50"."part": 10,000,000 rows
+Verified "tpch_sf50"."part": 10,000,000 rows
+Loading "tpch_sf50"."partsupp": 40,000,000 rows
+Verified "tpch_sf50"."partsupp": 40,000,000 rows
+Loading "tpch_sf50"."orders": 75,000,000 rows
+Verified "tpch_sf50"."orders": 75,000,000 rows
+Loading "tpch_sf50"."lineitem": 300,005,811 rows
+Verified "tpch_sf50"."lineitem": 300,005,811 rows
+ClickHouse dataset ready: tpch_sf50
+Data retained in /users/awitt/duckdb-adbc-client/build/tpch-sf50; finished in 231.1s
+done 20:56:29; disk: /dev/nvme0n1p3   63G   48G   13G  80% /
+exit=0
+   ┌─name────────┬─────rows─┬─size────────┐
+1. │ all_1_36_2  │ 39706038 │ 1002.28 MiB │
+2. │ all_37_68_2 │ 35293962 │ 890.97 MiB  │
+   └─────────────┴──────────┴─────────────┘

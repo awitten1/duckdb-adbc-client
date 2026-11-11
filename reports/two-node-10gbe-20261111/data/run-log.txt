@@ -1,0 +1,58 @@
+=== Setup: ClickHouse 26.11.1.1 on node-0.awitt-325769.slogora-pg0.utah.cloudlab.us; DuckDB node node-1.awitt-325769.slogora-pg0.utah.cloudlab.us
+   ┌─table──┬─────rows─┬─parts─┬─on_disk──┐
+1. │ orders │ 75000000 │     2 │ 1.85 GiB │
+   └────────┴──────────┴───────┴──────────┘
+
+=== 1. Correctness: one full read_adbc vs N range reads (rows, row-hash sum)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 16 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: none
+single read_adbc: 75000000 rows, hash sum 691747052758391932685914880
+4 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+10 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+
+=== 2. Raw curl downloads of the full table over the link (ArrowStream, max_threads=32)
+parallel_formatting=1 run 1: 8.656302 s, 9673331016 bytes
+parallel_formatting=0 run 1: 15.292618 s, 9673331016 bytes
+parallel_formatting=1 run 2: 8.690611 s, 9673331016 bytes
+parallel_formatting=0 run 2: 15.443187 s, 9673331016 bytes
+
+=== 3. read_adbc streams, output_format_parallel_formatting=1
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 16 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1          9.183   8.947-9.183      1.00x
+      2          8.522   8.490-8.522      1.08x
+      3          8.438   8.390-8.438      1.09x
+      4          8.456   8.428-8.456      1.09x
+      6          8.447   8.422-8.447      1.09x
+      8          8.395   8.368-8.395      1.09x
+     10          8.592   8.482-8.592      1.07x
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │           8.86 │                   96.2 │                  8.69 │              9.67 │
+2. │       2 │       4 │           8.36 │                  106.1 │                  8.16 │              9.67 │
+3. │       3 │       6 │           8.26 │                  103.9 │                  8.12 │              9.67 │
+4. │       4 │       8 │           7.86 │                  105.6 │                  7.66 │              9.67 │
+5. │       6 │      12 │            7.7 │                  102.9 │                  7.59 │              9.67 │
+6. │       8 │      16 │           7.06 │                   98.3 │                   6.9 │              9.67 │
+7. │      10 │      20 │           7.21 │                   98.5 │                     7 │              9.67 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+
+=== 3. read_adbc streams, output_format_parallel_formatting=0
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 16 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=0
+streams  median_wall_s  min-max_wall_s   speedup
+      1         15.556  15.297-15.556     1.00x
+      2          9.805   9.570-9.805      1.59x
+      3          8.415   8.397-8.415      1.85x
+      4          8.642   8.529-8.642      1.80x
+      6          8.484   8.466-8.484      1.83x
+      8          8.476   8.463-8.476      1.84x
+     10          8.444   8.399-8.444      1.84x
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │          15.21 │                   75.7 │                  7.39 │              9.67 │
+2. │       2 │       4 │           9.57 │                  109.7 │                  4.77 │              9.67 │
+3. │       3 │       6 │           8.27 │                  111.4 │                  4.67 │              9.67 │
+4. │       4 │       8 │           8.02 │                  106.6 │                  5.24 │              9.67 │
+5. │       6 │      12 │           7.33 │                  104.3 │                  5.26 │              9.67 │
+6. │       8 │      16 │           7.28 │                    105 │                  5.55 │              9.67 │
+7. │      10 │      20 │           6.86 │                   99.4 │                  5.23 │              9.67 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+
+[exited with code 0]

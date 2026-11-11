@@ -1,0 +1,4 @@
+1 connection(s), ms1006 -> ms1011: 9.36 Gb/s = 1.170 GB/s, local CPU 64%, remote CPU 76%
+1 connection(s), ms1011 -> ms1006 (ClickHouse direction): 9.34 Gb/s = 1.167 GB/s, local CPU 76%, remote CPU 65%
+4 connection(s), ms1006 -> ms1011: 9.41 Gb/s = 1.176 GB/s, local CPU 78%, remote CPU 169%
+4 connection(s), ms1011 -> ms1006 (ClickHouse direction): 9.41 Gb/s = 1.177 GB/s, local CPU 175%, remote CPU 77%
