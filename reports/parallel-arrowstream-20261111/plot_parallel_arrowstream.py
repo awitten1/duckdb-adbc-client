@@ -78,7 +78,7 @@ ROWS = (("par0-cpu9", "Serial, curl on ClickHouse's socket"),
         ("par0-cpu19", "Serial, curl on the other socket"),
         ("par1-cpu19", "Parallel, curl on the other socket"))
 PARTS = (("Waiting for the first block", "#b8b8b8"),
-         ("Encoding (serial) / copying chunks (parallel)", "#6250d6"),
+         ("Outside send(): encoding (serial); two threads' times combined (parallel)", "#6250d6"),
          ("Blocked in send()", "#1baf7a"))
 medians = {key: [statistics.median(v[i] for v in runs[key]) for i in range(4)] for key, _ in ROWS}
 fig, ax = plt.subplots(figsize=(11, 4.6))

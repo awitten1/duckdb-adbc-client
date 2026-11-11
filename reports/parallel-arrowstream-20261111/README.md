@@ -5,6 +5,12 @@ Measured 2026-11-11 on `c220g2-010602.wisc.cloudlab.us` (2× Xeon E5-2660 v3, Ha
 that one query's output is a serial stage: one processor encodes every Arrow block and writes it to the socket.
 This report prototypes encoding `ArrowStream` output in parallel and measures what it changes.
 
+> **Correction (2026-11-11).** An earlier version attributed 1.35 s of the parallel output stage to the collector
+> copying chunks into the HTTP buffer, and said the collector spent 70–80% of its time in `send()`. Both figures
+> subtracted two different threads' times. Measured per thread in the
+> [direct-send report](../direct-send-20261111/README.md), the collector is 99% busy: 1.96 s copying and 3.3 s
+> (62%) or 5.7 s (75%) in `send()`, which is the sender's own kernel work. The affected text and chart are fixed.
+
 **Summary.**
 
 - **The prototype reuses ClickHouse's existing parallel formatting.** `ArrowStream` record batches are
@@ -16,8 +22,8 @@ This report prototypes encoding `ArrowStream` output in parallel and measures wh
 - **Many streams are 8–9% slower.** From 4 streams up the batch takes 3.58–3.67 s instead of 3.29–3.36 s.
   ClickHouse's CPUs are already 90–96% busy there, and parallel formatting costs a little more CPU. The fastest
   batch is still serial formatting with 6–10 streams, at 3.29 s.
-- **The new single-stream bottleneck is the query's one connection.** The collector thread spends 70–80% of its
-  time blocked in `send()`: 3.3 s on ClickHouse's socket and 5.7 s from the other, the same as before. One
+- **The new single-stream bottleneck is the query's one connection.** The collector thread spends 62–75% of its
+  time in `send()`: 3.3 s on ClickHouse's socket and 5.7 s from the other, the same as before. One
   connection moves about 1.8 GB/s and 1.3 GB/s respectively.
 - **Multiple streams still help because each has its own connection.** Before, they also parallelized encoding;
   now only sending. The best speedup over one stream drops from 2.96× to 2.11×.
@@ -105,13 +111,17 @@ Raw curl downloads of the full table, from `system.query_log` and `system.proces
 | curl wall time | 7.27–7.33 s | **5.17–5.41 s** | 9.77–9.88 s | **7.51–7.56 s** |
 | Output stage busy | 6.79–6.83 s | 4.58–4.82 s | 9.20–9.32 s | 6.98–7.03 s |
 | …blocked in `send()` | 3.49 s | 3.22–3.39 s | 5.89–5.92 s | 5.64–5.70 s |
-| …everything else | 3.30–3.33 s | 1.36–1.43 s | 3.31–3.40 s | 1.33–1.34 s |
+| …everything else (parallel: see below) | 3.30–3.33 s | 1.36–1.43 s | 3.31–3.40 s | 1.33–1.34 s |
 | Waiting for the first block | 0.46–0.48 s | 0.54–0.55 s | 0.54 s | 0.48 s |
 | Table readers blocked on output (longest) | 6.60–6.62 s | 4.36–4.61 s | 9.09–9.20 s | 6.76–6.83 s |
 | ClickHouse CPU | 28.3–28.5 s | 31.0–31.3 s | 30.7–30.9 s | 31.0–31.4 s |
 
-- **Encoding is off the serial path.** Outside `send()`, the serial output stage spent 3.3 s, mostly encoding.
-  The parallel collector spends 1.35 s, copying each encoded chunk into the HTTP output buffer.
+- **Encoding is off the serial path.** Outside `send()`, the serial output stage spent 3.3 s encoding batches and
+  writing them into the HTTP output buffer. For the parallel columns, "everything else" is not one thread's time:
+  the output stage's busy time belongs to the pipeline thread handing chunks to the formatter, while the time in
+  `send()` belongs to the collector. Measured per thread in the
+  [direct-send report](../direct-send-20261111/README.md), the collector spends 1.96 s copying encoded chunks into
+  the HTTP buffer and is otherwise in `send()`.
 - **`send()` time did not change,** so the saving is the encoding time, about 2 s on either socket.
 - **The query is still paced by one thread.** The first-block wait plus the output stage's busy time still equals
   the wall time, and the 32 table readers still spend most of the query blocked on output.
@@ -155,11 +165,11 @@ ClickHouse's side of the same runs ([serial](./data/streams-par0-clickhouse.txt)
 ## 6. The new bottleneck, and why multiple streams still help
 
 - **One query is limited by its single connection.** The parallel collector is the only thread that writes to the
-  socket, and 70–80% of its time is blocked in `send()`. One connection moves 9.67 GB in about 5.3 s
+  socket, and 62–75% of its time is in `send()` (measured per thread in the direct-send report). One connection moves 9.67 GB in about 5.3 s
   (1.8 GB/s) to ClickHouse's socket and in about 7.5 s (1.3 GB/s) to the other socket.
-- **What `send()` waits on is open.** It could be the sending thread's own kernel work; on loopback the sender
-  also does much of the receive-side TCP processing. Or the socket buffer could be full, waiting for the receiver.
-  The client is not the limit compared with curl, since one `read_adbc` stream matches curl's time.
+- **`send()` time is the sender's own kernel work,** as the direct-send report later measured, not waiting for the
+  receiver: on loopback the sending thread also runs most of the receive-side TCP processing. The client is not
+  the limit compared with curl, since one `read_adbc` stream matches curl's time.
 - **N streams give N connections and N collectors,** so the time blocked in `send()` overlaps. Before this change,
   multiple streams also overlapped encoding; parallel formatting already does that within one query, so the gain
   from multiple streams shrinks from 2.96× to 2.11×.
@@ -172,7 +182,7 @@ ClickHouse's side of the same runs ([serial](./data/streams-par0-clickhouse.txt)
    `max_threads`; at 10 streams each query has 3.
 2. **Make the parallel path cheaper,** so it also wins when CPU is the limit:
    - have the collector send each encoded chunk straight to the socket instead of copying it into the HTTP buffer
-     (1.35 s per full table);
+     (1.96 s per full table; the [direct-send report](../direct-send-20261111/README.md) does this);
    - reuse encoders across chunks, which the serial writer does and a fresh formatter per chunk cannot.
 3. **Measure the single-connection ceiling directly:** a plain loopback TCP transfer (iperf3, or `nc` from
    `/dev/zero`) with the receiver on CPU 9 and CPU 19. If it tops out near 1.8 and 1.3 GB/s, the remaining
