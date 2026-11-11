@@ -130,6 +130,9 @@ Options:
   sorts every stream.
 - `--ch-max-threads=K`: append `SETTINGS max_threads=K` to each range query;
   `split` uses floor(32 / N).
+- `--ch-settings=LIST`: add these comma-separated ClickHouse settings to each
+  range query's `SETTINGS` clause, for example
+  `--ch-settings=output_format_parallel_formatting=0`.
 - `--threads=K`: DuckDB worker threads shared by all streams (default 16).
 - `--memory-limit=SIZE`: DuckDB memory limit (default 56GiB).
 - `--repeats=R`: measured repeats per stream count (default 3), after one
@@ -139,5 +142,6 @@ Options:
 
 It prints one `streams`, `repeat`, `wall_s` line per batch on stdout, and a
 median and speedup summary on stderr. Results are in
-[reports/stream-limits-20261110](../reports/stream-limits-20261110/README.md) and
-[reports/sorted-streams-20261111](../reports/sorted-streams-20261111/README.md).
+[reports/stream-limits-20261110](../reports/stream-limits-20261110/README.md),
+[reports/sorted-streams-20261111](../reports/sorted-streams-20261111/README.md) and
+[reports/parallel-arrowstream-20261111](../reports/parallel-arrowstream-20261111/README.md).

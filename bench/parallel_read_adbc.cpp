@@ -13,6 +13,7 @@
 //   --key=COLUMN           integer column used to split the table (default o_orderkey)
 //   --order-by=EXPR        append "ORDER BY EXPR" to each range query, so ClickHouse sorts every stream
 //   --ch-max-threads=K     append "SETTINGS max_threads=K" to each range query; "split" = floor(32 / N)
+//   --ch-settings=LIST     add these comma-separated ClickHouse settings to each range query's SETTINGS clause
 //   --threads=K            DuckDB worker threads, shared by all streams (default 16)
 //   --memory-limit=SIZE    DuckDB memory limit (default 56GiB)
 //   --repeats=R            measured repeats per stream count (default 3; one warmup batch first)
@@ -45,6 +46,7 @@ struct Options {
     string key = "o_orderkey";
     string order_by;
     string ch_max_threads;
+    string ch_settings;
     int threads = 16;
     string memory_limit = "56GiB";
     int repeats = 3;
@@ -86,11 +88,18 @@ string RangeQuery(const Options &options, idx_t streams, int64_t lo, int64_t hi)
     if (!options.order_by.empty()) {
         sql += " ORDER BY " + options.order_by;
     }
+    vector<string> settings;
     if (options.ch_max_threads == "split") {
-        sql += StringUtil::Format(" SETTINGS max_threads=%llu",
-                                  static_cast<unsigned long long>(std::max<idx_t>(1, 32 / streams)));
+        settings.push_back(StringUtil::Format("max_threads=%llu",
+                                              static_cast<unsigned long long>(std::max<idx_t>(1, 32 / streams))));
     } else if (!options.ch_max_threads.empty()) {
-        sql += " SETTINGS max_threads=" + options.ch_max_threads;
+        settings.push_back("max_threads=" + options.ch_max_threads);
+    }
+    if (!options.ch_settings.empty()) {
+        settings.push_back(options.ch_settings);
+    }
+    if (!settings.empty()) {
+        sql += " SETTINGS " + StringUtil::Join(settings, ", ");
     }
     return sql;
 }
@@ -159,6 +168,8 @@ Options Parse(int argc, char **argv) {
             options.order_by = v;
         } else if (auto v = value("--ch-max-threads")) {
             options.ch_max_threads = v;
+        } else if (auto v = value("--ch-settings")) {
+            options.ch_settings = v;
         } else if (auto v = value("--threads")) {
             options.threads = std::atoi(v);
         } else if (auto v = value("--memory-limit")) {
@@ -205,7 +216,8 @@ int main(int argc, char **argv) {
     std::cerr << source << ": " << rows << " rows, " << options.key << " in [" << lo << ", " << hi << "]; "
               << options.threads << " DuckDB threads shared by all streams; ClickHouse max_threads per query: "
               << (options.ch_max_threads.empty() ? "server default" : options.ch_max_threads)
-              << "; ORDER BY per stream: " << (options.order_by.empty() ? "none" : options.order_by) << std::endl;
+              << "; ORDER BY per stream: " << (options.order_by.empty() ? "none" : options.order_by)
+              << "; extra settings: " << (options.ch_settings.empty() ? "none" : options.ch_settings) << std::endl;
 
     if (options.checksum) {
         // Row count and an order-independent sum of row hashes, for one full read and for each stream count.
