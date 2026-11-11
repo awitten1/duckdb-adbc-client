@@ -2,17 +2,21 @@
 # Parallel read_adbc streams across a 10 Gb/s link: ClickHouse (custom build c933d005d) on ms1011 at 10.10.1.1,
 # DuckDB on this node (ms1006). Correctness check, raw curl downloads, then N = 1..10 key-range streams with
 # parallel ArrowStream formatting on and off. Both nodes: all 16 CPUs, clocks fixed at 2.0 GHz.
+# Environment: PROFILE (ADBC profile, default profile://myclickhouse), OUT_DIR (default ~/utah-streams),
+# CURL_PARAMS (extra URL parameters for the raw curl downloads, e.g. "&compress=1").
 set -euo pipefail
 cd ~/duckdb-adbc-client
 CH=http://10.10.1.1:8123/
-OUT=~/utah-streams
+OUT=${OUT_DIR:-~/utah-streams}
+PROFILE=${PROFILE:-profile://myclickhouse}
+CURL_PARAMS=${CURL_PARAMS:-}
 mkdir -p $OUT
 BENCH=build/release/extension/adbc/bench/parallel_read_adbc
-COMMON=(--threads=16 --memory-limit=48GiB --ch-max-threads=split)
+COMMON=(--profile=$PROFILE --threads=16 --memory-limit=48GiB --ch-max-threads=split)
 Q() { curl -fsS "$CH" --data-binary "$1"; }
 export ADBC_READER_THREAD=1
 
-echo "=== Setup: ClickHouse $(Q "SELECT version()") on $(Q "SELECT hostName()"); DuckDB node $(hostname)"
+echo "=== Setup: ClickHouse $(Q "SELECT version()") on $(Q "SELECT hostName()"); DuckDB node $(hostname); profile $PROFILE; curl params '$CURL_PARAMS'"
 Q "SELECT table, sum(rows) AS rows, count() AS parts, formatReadableSize(sum(bytes_on_disk)) AS on_disk
    FROM system.parts WHERE database = 'tpch_sf50' AND table = 'orders' AND active GROUP BY table FORMAT PrettyCompactMonoBlock"
 
@@ -24,7 +28,7 @@ SQL="SELECT * FROM tpch_sf50.orders WHERE o_orderkey BETWEEN 1 AND 300000000"
 for rep in 1 2; do
     for parallel in 1 0; do
         curl -fsS -o /dev/null -w "parallel_formatting=$parallel run $rep: %{time_total} s, %{size_download} bytes\n" \
-            "${CH}?default_format=ArrowStream&enable_http_compression=0&output_format_arrow_compression_method=none&max_threads=32&output_format_parallel_formatting=$parallel" \
+            "${CH}?default_format=ArrowStream&enable_http_compression=0&output_format_arrow_compression_method=none&max_threads=32&output_format_parallel_formatting=$parallel$CURL_PARAMS" \
             --data-binary "$SQL"
     done
 done | tee $OUT/curl.txt

@@ -1,0 +1,6 @@
+Null format, max_threads=32, run 1: 2.836534 s, 0 bytes
+Null format, max_threads=32, run 2: 2.733862 s, 0 bytes
+   ┌─query_id────┬─wall_s─┬─server_cpu_s─┬─user_s─┬─kernel_s─┬─read_rows─┬─read─────┐
+1. │ null16732-1 │   2.84 │         44.2 │     43 │      1.2 │  75000000 │ 7.68 GiB │
+2. │ null16732-2 │   2.73 │         42.6 │   41.8 │      0.9 │  75000000 │ 7.68 GiB │
+   └─────────────┴────────┴──────────────┴────────┴──────────┴───────────┴──────────┘
