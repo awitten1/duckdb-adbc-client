@@ -13,6 +13,7 @@
 - [Parallel ArrowStream formatting in ClickHouse: prototype, correctness, one stream vs many](./parallel-arrowstream-20261111/README.md)
 - [Sending parallel-formatted output without a copy: TCP ceiling, collector profile, direct HTTP writes](./direct-send-20261111/README.md)
 - [Parallel streams across a 10 Gb/s link: ClickHouse and DuckDB on separate nodes, with and without driver LZ4 compression](./two-node-10gbe-20261111/README.md)
+- [Sorted streams across a 10 Gb/s link: per-stream ORDER BY on two nodes, uncompressed and with LZ4](./two-node-sorted-streams-20261111/README.md)
 
 These reports and chart assets are tracked in Git. Raw DuckDB profiles,
 ClickHouse data, Parquet exports, and machine-specific logs remain under the

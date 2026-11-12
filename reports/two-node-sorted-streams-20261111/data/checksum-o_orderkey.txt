@@ -1,0 +1,4 @@
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 16 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_orderkey; extra settings: output_format_parallel_formatting=1
+single read_adbc: 75000000 rows, hash sum 691747052758391932685914880
+4 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+10 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
