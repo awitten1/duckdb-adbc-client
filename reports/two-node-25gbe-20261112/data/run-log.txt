@@ -1,0 +1,254 @@
+/users/awitt/hp-scripts/streams.sh:1
+/users/awitt/hp-scripts/sorted.sh:2
+##### uncompressed 19:41:46
+=== Setup: ClickHouse 26.11.1.1 on node-0.awitt-325905.slogora-pg0.utah.cloudlab.us; DuckDB node node-1.awitt-325905.slogora-pg0.utah.cloudlab.us; profile profile://myclickhouse; curl params ''
+   ┌─table──┬─────rows─┬─parts─┬─on_disk──┐
+1. │ orders │ 75000000 │     2 │ 1.85 GiB │
+   └────────┴──────────┴───────┴──────────┘
+
+=== 1. Correctness: one full read_adbc vs N range reads (rows, row-hash sum)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: none
+single read_adbc: 75000000 rows, hash sum 691747052758391932685914880
+4 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+10 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+
+=== 2. Raw curl downloads of the full table over the link (ArrowStream, max_threads=32)
+parallel_formatting=1 run 1: 4.899529 s, 9673330944 bytes
+parallel_formatting=0 run 1: 6.376404 s, 9673330944 bytes
+parallel_formatting=1 run 2: 4.712494 s, 9673330944 bytes
+parallel_formatting=0 run 2: 6.370819 s, 9673330944 bytes
+
+=== 3. read_adbc streams, output_format_parallel_formatting=1
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1          6.763   5.481-6.763      1.00x
+      2          3.851   3.639-3.851      1.76x
+      3          3.395   3.370-3.395      1.99x
+      4          3.575   3.365-3.575      1.89x
+      6          3.685   3.599-3.685      1.84x
+      8          3.409   3.362-3.409      1.98x
+     10          3.467   3.402-3.467      1.95x
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │           5.45 │                   24.7 │                  5.38 │              9.67 │
+2. │       2 │       4 │           3.67 │                   32.6 │                  3.62 │              9.67 │
+3. │       3 │       6 │           3.29 │                   35.4 │                  3.25 │              9.67 │
+4. │       4 │       8 │           3.25 │                   36.1 │                  3.21 │              9.67 │
+5. │       6 │      12 │           2.77 │                   37.3 │                  2.74 │              9.67 │
+6. │       8 │      16 │            2.9 │                   39.2 │                  2.84 │              9.67 │
+7. │      10 │      20 │           2.95 │                   40.1 │                  2.88 │              9.67 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+
+=== 3. read_adbc streams, output_format_parallel_formatting=0
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=0
+streams  median_wall_s  min-max_wall_s   speedup
+      1          6.724   6.684-6.724      1.00x
+      2          3.960   3.796-3.960      1.70x
+      3          3.418   3.341-3.418      1.97x
+      4          3.584   3.392-3.584      1.88x
+      6          3.473   3.335-3.473      1.94x
+      8          3.471   3.370-3.471      1.94x
+     10          3.402   3.360-3.402      1.98x
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │           6.69 │                   25.7 │                  3.45 │              9.67 │
+2. │       2 │       4 │           3.68 │                     29 │                   1.9 │              9.67 │
+3. │       3 │       6 │            3.3 │                   34.5 │                     2 │              9.67 │
+4. │       4 │       8 │           3.18 │                   34.7 │                  2.15 │              9.67 │
+5. │       6 │      12 │           3.27 │                   36.4 │                  2.46 │              9.67 │
+6. │       8 │      16 │           2.88 │                   37.8 │                  2.25 │              9.67 │
+7. │      10 │      20 │           2.63 │                   37.8 │                  2.05 │              9.67 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+##### LZ4 19:44:24
+=== Setup: ClickHouse 26.11.1.1 on node-0.awitt-325905.slogora-pg0.utah.cloudlab.us; DuckDB node node-1.awitt-325905.slogora-pg0.utah.cloudlab.us; profile profile://myclickhouse-lz4; curl params '&compress=1'
+   ┌─table──┬─────rows─┬─parts─┬─on_disk──┐
+1. │ orders │ 75000000 │     2 │ 1.85 GiB │
+   └────────┴──────────┴───────┴──────────┘
+
+=== 1. Correctness: one full read_adbc vs N range reads (rows, row-hash sum)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: none
+single read_adbc: 75000000 rows, hash sum 691747052758391932685914880
+4 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+10 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+
+=== 2. Raw curl downloads of the full table over the link (ArrowStream, max_threads=32)
+parallel_formatting=1 run 1: 24.228807 s, 4564650372 bytes
+parallel_formatting=0 run 1: 26.650741 s, 4564650342 bytes
+parallel_formatting=1 run 2: 24.275169 s, 4564650372 bytes
+parallel_formatting=0 run 2: 26.476230 s, 4564650355 bytes
+
+=== 3. read_adbc streams, output_format_parallel_formatting=1
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1         24.622  24.460-24.622     1.00x
+      2         12.460  12.325-12.460     1.98x
+      3          8.539   8.489-8.539      2.88x
+      4          7.010   6.696-7.010      3.51x
+      6          5.293   5.185-5.293      4.65x
+      8          4.640   4.563-4.640      5.31x
+     10          4.569   4.474-4.569      5.39x
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │          24.42 │                     46 │                  1.17 │              4.56 │
+2. │       2 │       4 │          12.28 │                   46.4 │                  0.68 │              4.56 │
+3. │       3 │       6 │           8.41 │                   48.2 │                  0.52 │              4.56 │
+4. │       4 │       8 │            6.7 │                   52.7 │                  0.44 │              4.56 │
+5. │       6 │      12 │           5.13 │                   63.5 │                  0.35 │              4.56 │
+6. │       8 │      16 │           4.51 │                   71.1 │                  0.32 │              4.56 │
+7. │      10 │      20 │            4.4 │                   74.8 │                  0.29 │              4.56 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+
+=== 3. read_adbc streams, output_format_parallel_formatting=0
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=0
+streams  median_wall_s  min-max_wall_s   speedup
+      1         26.870  26.719-26.870     1.00x
+      2         13.520  13.510-13.520     1.99x
+      3          9.186   9.102-9.186      2.93x
+      4          6.962   6.960-6.962      3.86x
+      6          5.487   5.484-5.487      4.90x
+      8          4.557   4.541-4.557      5.90x
+     10          4.244   4.206-4.244      6.33x
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │          26.68 │                   46.6 │                  1.34 │              4.56 │
+2. │       2 │       4 │          13.47 │                   46.7 │                  0.75 │              4.56 │
+3. │       3 │       6 │           9.08 │                   47.2 │                  0.54 │              4.56 │
+4. │       4 │       8 │            6.9 │                   47.7 │                  0.44 │              4.56 │
+5. │       6 │      12 │           5.41 │                   59.9 │                  0.35 │              4.56 │
+6. │       8 │      16 │           4.49 │                   67.4 │                  0.29 │              4.56 │
+7. │      10 │      20 │           4.15 │                   71.4 │                  0.26 │              4.56 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+##### sorted 19:52:07
+=== Setup: ClickHouse 26.11.1.1 on node-0.awitt-325905.slogora-pg0.utah.cloudlab.us; DuckDB node node-1.awitt-325905.slogora-pg0.utah.cloudlab.us
+   ┌─sorting_key──┬─active_parts─┐
+1. │ (o_orderkey) │            2 │
+   └──────────────┴──────────────┘
+
+=== 1. One query, full table, sorted, raw curl (ArrowStream, max_threads=32, parallel formatting)
+order_by=none compression=none run 1: 5.278545 s, 9673330944 bytes
+order_by=none compression=lz4 run 1: 24.238787 s, 4564650372 bytes
+order_by=o_orderkey compression=none run 1: 18.183950 s, 9673331584 bytes
+order_by=o_orderkey compression=lz4 run 1: 24.560458 s, 4564653620 bytes
+order_by=o_custkey compression=none run 1: 28.452926 s, 9668276984 bytes
+order_by=none compression=none run 2: 5.332945 s, 9673330944 bytes
+order_by=none compression=lz4 run 2: 24.344362 s, 4564650372 bytes
+order_by=o_orderkey compression=none run 2: 17.883989 s, 9673331584 bytes
+order_by=o_orderkey compression=lz4 run 2: 24.356204 s, 4564653620 bytes
+order_by=o_custkey compression=none run 2: 28.045467 s, 9668277056 bytes
+
+=== 2. read_adbc streams: nocompress-orderkey (profile profile://myclickhouse, ORDER BY o_orderkey per stream)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_orderkey; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1         18.022  17.970-18.022     1.00x
+      2          9.438   9.382-9.438      1.91x
+      3          6.546   6.476-6.546      2.75x
+      4          5.203   5.202-5.203      3.46x
+      6          3.815   3.736-3.815      4.72x
+      8          3.564   3.458-3.564      5.06x
+     10          3.545   3.539-3.545      5.08x
+streams	repeat	wall_s
+1	1	17.9703
+2	1	9.43781
+3	1	6.54586
+4	1	5.20201
+6	1	3.81531
+8	1	3.5637
+10	1	3.54519
+10	2	3.53917
+8	2	3.45828
+6	2	3.73605
+4	2	5.20303
+3	2	6.47583
+2	2	9.38162
+1	2	18.0216
+   ┌─streams─┬─queries─┬─median_query_s─┬─max_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┬─max_query_memory─┐
+1. │       1 │       3 │          17.99 │       18.34 │                   24.6 │                   2.8 │              9.67 │ 713.98 MiB       │
+2. │       2 │       4 │           9.31 │        9.41 │                   25.4 │                   1.5 │              9.67 │ 350.02 MiB       │
+3. │       3 │       6 │           6.43 │        6.51 │                   25.9 │                  1.08 │              9.67 │ 229.13 MiB       │
+4. │       4 │       8 │           5.01 │        5.15 │                   26.6 │                  0.84 │              9.67 │ 169.54 MiB       │
+5. │       6 │      12 │           3.61 │        3.76 │                   28.6 │                  0.73 │              9.67 │ 121.89 MiB       │
+6. │       8 │      16 │           3.37 │        3.51 │                   34.5 │                  1.86 │              9.67 │ 97.33 MiB        │
+7. │      10 │      20 │           3.32 │        3.49 │                     39 │                  2.32 │              9.67 │ 94.85 MiB        │
+   └─────────┴─────────┴────────────────┴─────────────┴────────────────────────┴───────────────────────┴───────────────────┴──────────────────┘
+
+=== 2. read_adbc streams: nocompress-custkey (profile profile://myclickhouse, ORDER BY o_custkey per stream)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_custkey; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1         27.640  27.560-27.640     1.00x
+      2         15.763  15.690-15.763     1.75x
+      3         12.362  12.338-12.362     2.24x
+      4         11.326  11.076-11.326     2.44x
+      6         11.088  11.084-11.088     2.49x
+      8         10.966  10.826-10.966     2.52x
+     10         10.907  10.835-10.907     2.53x
+streams	repeat	wall_s
+1	1	27.5604
+2	1	15.7634
+3	1	12.3623
+4	1	11.0762
+6	1	11.0881
+8	1	10.9664
+10	1	10.9073
+10	2	10.8346
+8	2	10.8257
+6	2	11.0841
+4	2	11.3265
+3	2	12.338
+2	2	15.6902
+1	2	27.6397
+   ┌─streams─┬─queries─┬─median_query_s─┬─max_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┬─max_query_memory─┐
+1. │       1 │       3 │          27.61 │       27.74 │                  140.6 │                  3.47 │              9.67 │ 10.99 GiB        │
+2. │       2 │       4 │          15.56 │       15.71 │                  149.1 │                  2.12 │              9.67 │ 5.55 GiB         │
+3. │       3 │       6 │          12.11 │       12.32 │                  161.5 │                  1.65 │              9.67 │ 3.69 GiB         │
+4. │       4 │       8 │          10.98 │       11.26 │                    178 │                  1.45 │              9.67 │ 2.83 GiB         │
+5. │       6 │      12 │          10.92 │       11.04 │                  210.8 │                  1.44 │              9.67 │ 1.94 GiB         │
+6. │       8 │      16 │          10.49 │       10.92 │                  206.4 │                  1.19 │              9.67 │ 1.48 GiB         │
+7. │      10 │      20 │          10.46 │       10.84 │                  207.6 │                  0.99 │              9.67 │ 1.20 GiB         │
+   └─────────┴─────────┴────────────────┴─────────────┴────────────────────────┴───────────────────────┴───────────────────┴──────────────────┘
+
+=== 2. read_adbc streams: lz4-orderkey (profile profile://myclickhouse-lz4, ORDER BY o_orderkey per stream)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_orderkey; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1         24.361  24.343-24.361     1.00x
+      2         12.574  12.491-12.574     1.94x
+      3          8.529   8.508-8.529      2.86x
+      4          6.946   6.889-6.946      3.51x
+      6          5.525   5.458-5.525      4.41x
+      8          4.605   4.579-4.605      5.29x
+     10          4.349   4.334-4.349      5.60x
+streams	repeat	wall_s
+1	1	24.3425
+2	1	12.4913
+3	1	8.50763
+4	1	6.88937
+6	1	5.52516
+8	1	4.60535
+10	1	4.33408
+10	2	4.34908
+8	2	4.57915
+6	2	5.45791
+4	2	6.94602
+3	2	8.52896
+2	2	12.5742
+1	2	24.3612
+   ┌─streams─┬─queries─┬─median_query_s─┬─max_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┬─max_query_memory─┐
+1. │       1 │       3 │          24.32 │       24.59 │                   46.4 │                  1.09 │              4.56 │ 730.99 MiB       │
+2. │       2 │       4 │          12.46 │       12.53 │                   47.9 │                   0.7 │              4.56 │ 368.40 MiB       │
+3. │       3 │       6 │           8.46 │        8.49 │                   49.9 │                  0.51 │              4.56 │ 252.99 MiB       │
+4. │       4 │       8 │           6.74 │        6.89 │                   54.4 │                  0.44 │              4.56 │ 189.49 MiB       │
+5. │       6 │      12 │           5.33 │        5.49 │                   65.1 │                  0.36 │              4.56 │ 140.99 MiB       │
+6. │       8 │      16 │           4.47 │        4.57 │                   72.9 │                  0.31 │              4.56 │ 100.66 MiB       │
+7. │      10 │      20 │           4.21 │         4.3 │                   77.2 │                  0.28 │              4.56 │ 95.25 MiB        │
+   └─────────┴─────────┴────────────────┴─────────────┴────────────────────────┴───────────────────────┴───────────────────┴──────────────────┘
+
+=== done
+##### sorted correctness and parts 20:03:52
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_orderkey; extra settings: output_format_parallel_formatting=1
+single read_adbc: 75000000 rows, hash sum 691747052758391932685914880
+4 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+10 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DuckDB threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_custkey; extra settings: output_format_parallel_formatting=1
+single read_adbc: 75000000 rows, hash sum 691747052758391932685914880
+4 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+10 threads: 75000000 rows, hash sum 691747052758391932685914880  MATCH
+   ┌─_part───────┬─────rows─┬─min(o_orderkey)─┬─max(o_orderkey)─┐
+1. │ all_1_36_2  │ 39706038 │               1 │       167647713 │ -- 167.65 million
+2. │ all_37_68_2 │ 35293962 │       154413696 │       300000000 │ -- 300.00 million
+   └─────────────┴──────────┴─────────────────┴─────────────────┘
+##### all done 20:04:35

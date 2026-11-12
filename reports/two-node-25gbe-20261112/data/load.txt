@@ -1,0 +1,42 @@
+generate started 19:33:11
+Generating all TPC-H tables at SF50 in /users/awitt/duckdb-adbc-client/build/tpch-sf50/tpch.duckdb
+Exporting region: 5 rows
+Exporting nation: 25 rows
+Exporting supplier: 500,000 rows
+Exporting customer: 7,500,000 rows
+Exporting part: 10,000,000 rows
+Exporting partsupp: 40,000,000 rows
+Exporting orders: 75,000,000 rows
+Exporting lineitem: 300,005,811 rows
+Data retained in /users/awitt/duckdb-adbc-client/build/tpch-sf50; finished in 164.3s
+4.0K	build/tpch-sf50/nation.parquet
+4.0K	build/tpch-sf50/region.parquet
+8.0K	build/tpch-sf50/manifest.json
+25M	build/tpch-sf50/supplier.parquet
+197M	build/tpch-sf50/part.parquet
+381M	build/tpch-sf50/customer.parquet
+1.4G	build/tpch-sf50/partsupp.parquet
+1.9G	build/tpch-sf50/orders.parquet
+7.4G	build/tpch-sf50/lineitem.parquet
+14G	build/tpch-sf50/tpch.duckdb
+load started 19:35:57; disk: /dev/sda3        63G   17G   44G  28% /
+Loading "tpch_sf50"."region": 5 rows
+Verified "tpch_sf50"."region": 5 rows
+Loading "tpch_sf50"."nation": 25 rows
+Verified "tpch_sf50"."nation": 25 rows
+Loading "tpch_sf50"."supplier": 500,000 rows
+Verified "tpch_sf50"."supplier": 500,000 rows
+Loading "tpch_sf50"."customer": 7,500,000 rows
+Verified "tpch_sf50"."customer": 7,500,000 rows
+Loading "tpch_sf50"."part": 10,000,000 rows
+Verified "tpch_sf50"."part": 10,000,000 rows
+Loading "tpch_sf50"."partsupp": 40,000,000 rows
+Verified "tpch_sf50"."partsupp": 40,000,000 rows
+Loading "tpch_sf50"."orders": 75,000,000 rows
+Verified "tpch_sf50"."orders": 75,000,000 rows
+Loading "tpch_sf50"."lineitem": 300,005,811 rows
+Verified "tpch_sf50"."lineitem": 300,005,811 rows
+ClickHouse dataset ready: tpch_sf50
+Data retained in /users/awitt/duckdb-adbc-client/build/tpch-sf50; finished in 133.6s
+done 19:38:11; disk: /dev/sda3        63G   43G   17G  73% /
+exit=0

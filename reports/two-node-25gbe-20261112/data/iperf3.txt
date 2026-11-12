@@ -1,0 +1,4 @@
+1 connection(s), hp036 -> hp034: 17.37 Gb/s = 2.171 GB/s, local CPU 48%, remote CPU 90%, retransmits 339
+1 connection(s), hp034 -> hp036 (ClickHouse direction): 17.08 Gb/s = 2.135 GB/s, local CPU 93%, remote CPU 47%, retransmits 377
+4 connection(s), hp036 -> hp034: 23.50 Gb/s = 2.938 GB/s, local CPU 57%, remote CPU 96%, retransmits 0
+4 connection(s), hp034 -> hp036 (ClickHouse direction): 23.51 Gb/s = 2.938 GB/s, local CPU 106%, remote CPU 59%, retransmits 0

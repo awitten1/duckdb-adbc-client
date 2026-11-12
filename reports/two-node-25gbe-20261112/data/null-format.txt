@@ -1,0 +1,8 @@
+Null format run 1: 1.808391 s
+Null format run 2: 1.772253 s
+Null format run 3: 1.788440 s
+   ┌─log_comment─┬────s─┬─cpu_s─┬─mem───────┐
+1. │ null-scan-1 │ 1.81 │  34.6 │ 85.64 MiB │
+2. │ null-scan-2 │ 1.77 │  34.5 │ 87.10 MiB │
+3. │ null-scan-3 │ 1.79 │  34.5 │ 99.75 MiB │
+   └─────────────┴──────┴───────┴───────────┘

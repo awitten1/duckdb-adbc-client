@@ -1,0 +1,48 @@
+## hp034
+before: driver=intel_cpufreq governor=schedutil no_turbo=0 min=1200000 max=3400000
+after:  governor=performance no_turbo=1 min=2400000 max=2400000
+under load: 2.39 GHz average per CPU (20 CPUs busy for 3 s)
+  idle now: 1 CPUs at 2393.208 MHz
+  idle now: 1 CPUs at 2394.519 MHz
+  idle now: 1 CPUs at 2394.551 MHz
+  idle now: 1 CPUs at 2394.587 MHz
+  idle now: 1 CPUs at 2394.599 MHz
+  idle now: 1 CPUs at 2394.694 MHz
+  idle now: 1 CPUs at 2394.857 MHz
+  idle now: 1 CPUs at 2394.906 MHz
+  idle now: 1 CPUs at 2394.938 MHz
+  idle now: 1 CPUs at 2394.982 MHz
+  idle now: 1 CPUs at 2395.032 MHz
+  idle now: 1 CPUs at 2395.227 MHz
+  idle now: 1 CPUs at 2395.393 MHz
+  idle now: 1 CPUs at 2395.948 MHz
+  idle now: 1 CPUs at 2396.642 MHz
+  idle now: 1 CPUs at 2396.750 MHz
+  idle now: 1 CPUs at 2396.892 MHz
+  idle now: 1 CPUs at 2396.898 MHz
+  idle now: 1 CPUs at 2397.148 MHz
+  idle now: 1 CPUs at 2400.661 MHz
+## hp036
+before: driver=intel_cpufreq governor=schedutil no_turbo=0 min=1200000 max=3400000
+after:  governor=performance no_turbo=1 min=2400000 max=2400000
+under load: 2.39 GHz average per CPU (20 CPUs busy for 3 s)
+  idle now: 1 CPUs at 2391.425 MHz
+  idle now: 1 CPUs at 2392.786 MHz
+  idle now: 1 CPUs at 2394.374 MHz
+  idle now: 1 CPUs at 2394.393 MHz
+  idle now: 1 CPUs at 2394.402 MHz
+  idle now: 1 CPUs at 2394.409 MHz
+  idle now: 1 CPUs at 2394.420 MHz
+  idle now: 1 CPUs at 2394.554 MHz
+  idle now: 1 CPUs at 2394.927 MHz
+  idle now: 1 CPUs at 2394.965 MHz
+  idle now: 1 CPUs at 2395.109 MHz
+  idle now: 1 CPUs at 2395.117 MHz
+  idle now: 1 CPUs at 2395.368 MHz
+  idle now: 1 CPUs at 2395.381 MHz
+  idle now: 1 CPUs at 2395.937 MHz
+  idle now: 1 CPUs at 2396.178 MHz
+  idle now: 1 CPUs at 2396.474 MHz
+  idle now: 1 CPUs at 2396.477 MHz
+  idle now: 1 CPUs at 2397.182 MHz
+  idle now: 1 CPUs at 2400.000 MHz
