@@ -1,0 +1,253 @@
+/users/awitt/df-scripts/sorted.sh:BENCH=/users/awitt/df-bench/target/release/parallel_read_datafusion
+/users/awitt/df-scripts/sorted.sh:    $BENCH --profile=$profile --threads=20 --memory-limit=48GiB --ch-max-threads=split --ch-settings=$PAR \
+/users/awitt/df-scripts/sorted.sh:#       $BENCH --profile=profile://myclickhouse --threads=20 --memory-limit=48GiB --ch-max-threads=split \
+/users/awitt/df-scripts/streams.sh:BENCH=/users/awitt/df-bench/target/release/parallel_read_datafusion
+/users/awitt/df-scripts/streams.sh:COMMON=(--profile=$PROFILE --threads=20 --memory-limit=48GiB --ch-max-threads=split)
+##### uncompressed 20:49:41
+=== Setup: ClickHouse 26.11.1.1 on node-0.awitt-325905.slogora-pg0.utah.cloudlab.us; DuckDB node node-1.awitt-325905.slogora-pg0.utah.cloudlab.us; profile profile://myclickhouse; curl params ''
+   ┌─table──┬─────rows─┬─parts─┬─on_disk──┐
+1. │ orders │ 75000000 │     2 │ 1.85 GiB │
+   └────────┴──────────┴───────┴──────────┘
+
+=== 1. Correctness: one full read_adbc vs N range reads (rows, row-hash sum)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: none
+single DataFusion read: 75000000 rows, hash sum 691691743925057184563366403
+4 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+10 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+
+=== 2. Raw curl downloads of the full table over the link (ArrowStream, max_threads=32)
+parallel_formatting=1 run 1: 5.084806 s, 9673330944 bytes
+parallel_formatting=0 run 1: 6.360950 s, 9673330944 bytes
+parallel_formatting=1 run 2: 5.404233 s, 9673330944 bytes
+parallel_formatting=0 run 2: 6.330015 s, 9673330944 bytes
+
+=== 3. read_adbc streams, output_format_parallel_formatting=1
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1          5.790   5.133-5.790      1.00
+      2          3.800   3.536-3.800      1.52
+      3          3.433   3.325-3.433      1.69
+      4          3.417   3.361-3.417      1.69
+      6          3.477   3.374-3.477      1.67
+      8          3.355   3.332-3.355      1.73
+     10          3.338   3.326-3.338      1.73
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │           5.13 │                   25.3 │                  5.06 │              9.67 │
+2. │       2 │       4 │           3.51 │                   32.8 │                  3.46 │              9.67 │
+3. │       3 │       6 │           3.31 │                   35.4 │                  3.27 │              9.67 │
+4. │       4 │       8 │           3.09 │                   36.2 │                  3.05 │              9.67 │
+5. │       6 │      12 │              3 │                   37.4 │                  2.96 │              9.67 │
+6. │       8 │      16 │            2.9 │                   38.6 │                  2.85 │              9.67 │
+7. │      10 │      20 │           2.72 │                   38.8 │                  2.64 │              9.67 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+
+=== 3. read_adbc streams, output_format_parallel_formatting=0
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=0
+streams  median_wall_s  min-max_wall_s   speedup
+      1          6.375   6.373-6.375      1.00
+      2          3.900   3.565-3.900      1.63
+      3          3.347   3.303-3.347      1.90
+      4          3.317   3.309-3.317      1.92
+      6          3.422   3.307-3.422      1.86
+      8          3.438   3.320-3.438      1.85
+     10          3.420   3.317-3.420      1.86
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │           6.37 │                   26.2 │                  3.04 │              9.67 │
+2. │       2 │       4 │           3.53 │                   29.2 │                  1.75 │              9.67 │
+3. │       3 │       6 │           3.29 │                   34.5 │                  1.97 │              9.67 │
+4. │       4 │       8 │            3.3 │                   35.3 │                  2.25 │              9.67 │
+5. │       6 │      12 │           3.29 │                   36.7 │                  2.48 │              9.67 │
+6. │       8 │      16 │           2.89 │                   38.8 │                   2.2 │              9.67 │
+7. │      10 │      20 │           2.96 │                     38 │                   2.4 │              9.67 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+##### LZ4 20:52:45
+=== Setup: ClickHouse 26.11.1.1 on node-0.awitt-325905.slogora-pg0.utah.cloudlab.us; DuckDB node node-1.awitt-325905.slogora-pg0.utah.cloudlab.us; profile profile://myclickhouse-lz4; curl params '&compress=1'
+   ┌─table──┬─────rows─┬─parts─┬─on_disk──┐
+1. │ orders │ 75000000 │     2 │ 1.85 GiB │
+   └────────┴──────────┴───────┴──────────┘
+
+=== 1. Correctness: one full read_adbc vs N range reads (rows, row-hash sum)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: none
+single DataFusion read: 75000000 rows, hash sum 691691743925057184563366403
+4 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+10 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+
+=== 2. Raw curl downloads of the full table over the link (ArrowStream, max_threads=32)
+parallel_formatting=1 run 1: 24.298107 s, 4564650372 bytes
+parallel_formatting=0 run 1: 26.612163 s, 4564650368 bytes
+parallel_formatting=1 run 2: 24.268851 s, 4564650372 bytes
+parallel_formatting=0 run 2: 26.655592 s, 4564650332 bytes
+
+=== 3. read_adbc streams, output_format_parallel_formatting=1
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1         24.612  24.307-24.612     1.00
+      2         12.359  12.336-12.359     1.99
+      3          8.500   8.429-8.500      2.90
+      4          6.646   6.542-6.646      3.70
+      6          5.301   5.202-5.301      4.64
+      8          4.505   4.501-4.505      5.46
+     10          4.311   4.303-4.311      5.71
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │          24.33 │                   45.6 │                  1.14 │              4.56 │
+2. │       2 │       4 │          12.31 │                   46.3 │                  0.68 │              4.56 │
+3. │       3 │       6 │           8.41 │                   47.9 │                  0.51 │              4.56 │
+4. │       4 │       8 │           6.54 │                   51.2 │                  0.42 │              4.56 │
+5. │       6 │      12 │           5.06 │                   62.2 │                  0.34 │              4.56 │
+6. │       8 │      16 │           4.46 │                   70.2 │                  0.31 │              4.56 │
+7. │      10 │      20 │           4.25 │                   74.6 │                  0.29 │              4.56 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+
+=== 3. read_adbc streams, output_format_parallel_formatting=0
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: output_format_parallel_formatting=0
+streams  median_wall_s  min-max_wall_s   speedup
+      1         26.787  26.707-26.787     1.00
+      2         13.542  13.458-13.542     1.98
+      3          9.095   9.065-9.095      2.95
+      4          6.900   6.895-6.900      3.88
+      6          5.314   5.287-5.314      5.04
+      8          4.401   4.390-4.401      6.09
+     10          4.100   3.994-4.100      6.53
+   ┌─streams─┬─queries─┬─median_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┐
+1. │       1 │       3 │          26.78 │                   46.5 │                  1.31 │              4.56 │
+2. │       2 │       4 │          13.48 │                   46.7 │                  0.74 │              4.56 │
+3. │       3 │       6 │           9.06 │                   47.1 │                  0.53 │              4.56 │
+4. │       4 │       8 │           6.86 │                   47.6 │                  0.42 │              4.56 │
+5. │       6 │      12 │           5.24 │                   57.2 │                  0.34 │              4.56 │
+6. │       8 │      16 │           4.37 │                   65.7 │                  0.29 │              4.56 │
+7. │      10 │      20 │              4 │                   70.4 │                  0.25 │              4.56 │
+   └─────────┴─────────┴────────────────┴────────────────────────┴───────────────────────┴───────────────────┘
+##### sorted 21:00:33
+=== Setup: ClickHouse 26.11.1.1 on node-0.awitt-325905.slogora-pg0.utah.cloudlab.us; DuckDB node node-1.awitt-325905.slogora-pg0.utah.cloudlab.us
+   ┌─sorting_key──┬─active_parts─┐
+1. │ (o_orderkey) │            2 │
+   └──────────────┴──────────────┘
+
+=== 1. One query, full table, sorted, raw curl (ArrowStream, max_threads=32, parallel formatting)
+order_by=none compression=none run 1: 5.274078 s, 9673330944 bytes
+order_by=none compression=lz4 run 1: 24.204361 s, 4564650372 bytes
+order_by=o_orderkey compression=none run 1: 17.910521 s, 9673331584 bytes
+order_by=o_orderkey compression=lz4 run 1: 24.444200 s, 4564653620 bytes
+order_by=o_custkey compression=none run 1: 27.890112 s, 9668277144 bytes
+order_by=none compression=none run 2: 5.244078 s, 9673330944 bytes
+order_by=none compression=lz4 run 2: 24.327454 s, 4564650372 bytes
+order_by=o_orderkey compression=none run 2: 18.005403 s, 9673331584 bytes
+order_by=o_orderkey compression=lz4 run 2: 24.349244 s, 4564653620 bytes
+order_by=o_custkey compression=none run 2: 27.849887 s, 9668277160 bytes
+
+=== 2. read_adbc streams: nocompress-orderkey (profile profile://myclickhouse, ORDER BY o_orderkey per stream)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_orderkey; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1         17.952  17.929-17.952     1.00
+      2          9.345   9.293-9.345      1.92
+      3          6.458   6.380-6.458      2.78
+      4          5.137   5.010-5.137      3.49
+      6          3.764   3.692-3.764      4.77
+      8          3.663   3.469-3.663      4.90
+     10          3.510   3.460-3.510      5.11
+streams	repeat	wall_s
+1	1	17.951854345
+2	1	9.345097063
+3	1	6.458167478
+4	1	5.009740946
+6	1	3.763729143
+8	1	3.468699597
+10	1	3.46043249
+10	2	3.510039867
+8	2	3.662934042
+6	2	3.692417306
+4	2	5.137498562
+3	2	6.379696936
+2	2	9.29319695
+1	2	17.929360375
+   ┌─streams─┬─queries─┬─median_query_s─┬─max_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┬─max_query_memory─┐
+1. │       1 │       3 │          17.95 │       18.12 │                   24.6 │                  2.84 │              9.67 │ 712.95 MiB       │
+2. │       2 │       4 │           9.28 │        9.34 │                   25.4 │                  1.51 │              9.67 │ 350.25 MiB       │
+3. │       3 │       6 │           6.37 │        6.46 │                   25.8 │                  1.07 │              9.67 │ 230.20 MiB       │
+4. │       4 │       8 │           4.95 │        5.14 │                   26.5 │                  0.86 │              9.67 │ 170.26 MiB       │
+5. │       6 │      12 │           3.57 │        3.76 │                   28.5 │                  0.71 │              9.67 │ 131.35 MiB       │
+6. │       8 │      16 │           3.32 │        3.66 │                   34.5 │                  1.97 │              9.67 │ 97.74 MiB        │
+7. │      10 │      20 │           3.29 │        3.51 │                   39.8 │                  2.15 │              9.67 │ 96.82 MiB        │
+   └─────────┴─────────┴────────────────┴─────────────┴────────────────────────┴───────────────────────┴───────────────────┴──────────────────┘
+
+=== 2. read_adbc streams: nocompress-custkey (profile profile://myclickhouse, ORDER BY o_custkey per stream)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_custkey; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1         27.566  27.238-27.566     1.00
+      2         15.509  15.347-15.509     1.78
+      3         12.506  12.405-12.506     2.20
+      4         11.234  11.140-11.234     2.45
+      6         11.010  10.980-11.010     2.50
+      8         10.492  10.491-10.492     2.63
+     10         11.073  11.010-11.073     2.49
+streams	repeat	wall_s
+1	1	27.237500977
+2	1	15.509079408
+3	1	12.405385737
+4	1	11.139924087
+6	1	11.009972973
+8	1	10.492294167
+10	1	11.010229729
+10	2	11.072558554
+8	2	10.490910064
+6	2	10.979828995
+4	2	11.233948025
+3	2	12.506151093
+2	2	15.34735009
+1	2	27.565837119
+   ┌─streams─┬─queries─┬─median_query_s─┬─max_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┬─max_query_memory─┐
+1. │       1 │       3 │          27.56 │       27.72 │                  141.3 │                  3.61 │              9.67 │ 10.99 GiB        │
+2. │       2 │       4 │          15.32 │        15.5 │                  145.6 │                  2.24 │              9.67 │ 5.55 GiB         │
+3. │       3 │       6 │          12.36 │        12.5 │                  164.5 │                  1.69 │              9.67 │ 3.72 GiB         │
+4. │       4 │       8 │          11.04 │       11.23 │                  179.3 │                  1.41 │              9.67 │ 2.82 GiB         │
+5. │       6 │      12 │          10.87 │       10.99 │                  209.1 │                  1.46 │              9.67 │ 1.92 GiB         │
+6. │       8 │      16 │          10.38 │       10.49 │                  203.9 │                  1.23 │              9.67 │ 1.48 GiB         │
+7. │      10 │      20 │          10.66 │       11.07 │                  211.1 │                  0.99 │              9.67 │ 1.20 GiB         │
+   └─────────┴─────────┴────────────────┴─────────────┴────────────────────────┴───────────────────────┴───────────────────┴──────────────────┘
+
+=== 2. read_adbc streams: lz4-orderkey (profile profile://myclickhouse-lz4, ORDER BY o_orderkey per stream)
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_orderkey; extra settings: output_format_parallel_formatting=1
+streams  median_wall_s  min-max_wall_s   speedup
+      1         24.362  24.308-24.362     1.00
+      2         12.840  12.492-12.840     1.90
+      3          8.784   8.619-8.784      2.77
+      4          6.893   6.761-6.893      3.53
+      6          5.491   5.433-5.491      4.44
+      8          4.588   4.558-4.588      5.31
+     10          4.285   4.245-4.285      5.69
+streams	repeat	wall_s
+1	1	24.361607905
+2	1	12.839506041
+3	1	8.619346269
+4	1	6.760849344
+6	1	5.490514033
+8	1	4.5581395449999995
+10	1	4.244891321
+10	2	4.285165941
+8	2	4.588492103
+6	2	5.432626152
+4	2	6.893392125
+3	2	8.784295259
+2	2	12.491707612
+1	2	24.307591128
+   ┌─streams─┬─queries─┬─median_query_s─┬─max_query_s─┬─server_cpu_s_per_batch─┬─median_send_blocked_s─┬─gb_sent_per_batch─┬─max_query_memory─┐
+1. │       1 │       3 │          24.35 │       24.62 │                   46.6 │                  1.11 │              4.56 │ 725.25 MiB       │
+2. │       2 │       4 │          12.44 │       12.81 │                   48.1 │                  0.71 │              4.56 │ 368.90 MiB       │
+3. │       3 │       6 │           8.56 │        8.78 │                   50.4 │                  0.52 │              4.56 │ 252.56 MiB       │
+4. │       4 │       8 │           6.74 │        6.89 │                   54.3 │                  0.43 │              4.56 │ 190.18 MiB       │
+5. │       6 │      12 │           5.28 │        5.49 │                   64.7 │                  0.36 │              4.56 │ 138.82 MiB       │
+6. │       8 │      16 │           4.51 │        4.58 │                   72.8 │                  0.31 │              4.56 │ 100.67 MiB       │
+7. │      10 │      20 │           4.21 │        4.27 │                   77.2 │                  0.29 │              4.56 │ 96.60 MiB        │
+   └─────────┴─────────┴────────────────┴─────────────┴────────────────────────┴───────────────────────┴───────────────────┴──────────────────┘
+
+=== done
+##### sorted correctness 21:12:14
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_orderkey; extra settings: output_format_parallel_formatting=1
+single DataFusion read: 75000000 rows, hash sum 691691743925057184563366403
+4 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+10 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: o_custkey; extra settings: output_format_parallel_formatting=1
+single DataFusion read: 75000000 rows, hash sum 691691743925057184563366403
+4 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+10 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+##### all done 21:13:54

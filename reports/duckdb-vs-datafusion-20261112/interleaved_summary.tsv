@@ -1,0 +1,9 @@
+measure	DuckDB	DataFusion	curl
+single_stream_median_s	5.668	5.108	5.111
+single_stream_min_max_s	5.359-7.066	4.725-6.507	5.068-5.249
+ten_stream_median_s	3.393	3.339	
+ten_stream_min_max_s	3.379-3.484	3.324-3.398	
+cpu_s_per_single_stream_read	7.98	5.63	
+cpu_s_per_ten_stream_batch_est	17.09	14.26	
+user_share_streams_1	0.72	0.65	
+user_share_streams_10	0.56	0.50	

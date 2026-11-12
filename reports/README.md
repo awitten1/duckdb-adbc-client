@@ -14,6 +14,7 @@
 - [Sending parallel-formatted output without a copy: TCP ceiling, collector profile, direct HTTP writes](./direct-send-20261111/README.md)
 - [Parallel streams across a 10 Gb/s link: ClickHouse and DuckDB on separate nodes, with and without driver LZ4 compression](./two-node-10gbe-20261111/README.md)
 - [Parallel and sorted streams across a 25 Gb/s link: compression, formatting, per-stream ORDER BY, and the 10 vs 25 Gb/s comparison](./two-node-25gbe-20261112/README.md)
+- [DuckDB vs DataFusion reading the same ADBC streams: every 25 Gb/s configuration, plus a back-to-back single-stream and client-CPU check](./duckdb-vs-datafusion-20261112/README.md)
 - [Sorted streams across a 10 Gb/s link: per-stream ORDER BY on two nodes, uncompressed and with LZ4](./two-node-sorted-streams-20261111/README.md)
 
 These reports and chart assets are tracked in Git. Raw DuckDB profiles,

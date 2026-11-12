@@ -1,0 +1,4 @@
+parallel_formatting=1 run 1: 5.084806 s, 9673330944 bytes
+parallel_formatting=0 run 1: 6.360950 s, 9673330944 bytes
+parallel_formatting=1 run 2: 5.404233 s, 9673330944 bytes
+parallel_formatting=0 run 2: 6.330015 s, 9673330944 bytes

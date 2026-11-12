@@ -1,0 +1,17 @@
+[package]
+name = "parallel_read_datafusion"
+version = "0.1.0"
+edition = "2021"
+description = "DataFusion counterpart of bench/parallel_read_adbc: N parallel ADBC key-range streams in one process"
+publish = false
+
+[dependencies]
+# These versions share arrow 59.3.2, so batches pass from the ADBC driver to DataFusion without conversion.
+adbc_core = "=0.24.0"
+adbc_driver_manager = "=0.24.0"
+datafusion = "=55.2.0"
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+
+[profile.release]
+debug = 1

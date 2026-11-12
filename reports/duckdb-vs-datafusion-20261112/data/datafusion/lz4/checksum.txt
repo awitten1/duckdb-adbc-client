@@ -1,0 +1,4 @@
+tpch_sf50.orders: 75000000 rows, o_orderkey in [1, 300000000]; 20 DataFusion threads shared by all streams; ClickHouse max_threads per query: split; ORDER BY per stream: none; extra settings: none
+single DataFusion read: 75000000 rows, hash sum 691691743925057184563366403
+4 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH
+10 threads: 75000000 rows, hash sum 691691743925057184563366403  MATCH

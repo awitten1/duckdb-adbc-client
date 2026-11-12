@@ -1,0 +1,10 @@
+order_by=none compression=none run 1: 5.274078 s, 9673330944 bytes
+order_by=none compression=lz4 run 1: 24.204361 s, 4564650372 bytes
+order_by=o_orderkey compression=none run 1: 17.910521 s, 9673331584 bytes
+order_by=o_orderkey compression=lz4 run 1: 24.444200 s, 4564653620 bytes
+order_by=o_custkey compression=none run 1: 27.890112 s, 9668277144 bytes
+order_by=none compression=none run 2: 5.244078 s, 9673330944 bytes
+order_by=none compression=lz4 run 2: 24.327454 s, 4564650372 bytes
+order_by=o_orderkey compression=none run 2: 18.005403 s, 9673331584 bytes
+order_by=o_orderkey compression=lz4 run 2: 24.349244 s, 4564653620 bytes
+order_by=o_custkey compression=none run 2: 27.849887 s, 9668277160 bytes

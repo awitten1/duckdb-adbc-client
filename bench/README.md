@@ -2,6 +2,7 @@
 
 - [Arrow → DuckDB conversion](#arrow--duckdb-conversion): `arrow_conversion_bench`, `counters_per_row.py`, `ab_compare.py`
 - [Parallel `read_adbc` streams](#parallel-read_adbc-streams): `parallel_read_adbc`
+- [The same streams in DataFusion](#the-same-streams-in-datafusion): `datafusion/` (`parallel_read_datafusion`)
 
 ## Arrow → DuckDB conversion
 
@@ -145,3 +146,34 @@ median and speedup summary on stderr. Results are in
 [reports/stream-limits-20261110](../reports/stream-limits-20261110/README.md),
 [reports/sorted-streams-20261111](../reports/sorted-streams-20261111/README.md) and
 [reports/parallel-arrowstream-20261111](../reports/parallel-arrowstream-20261111/README.md).
+
+## The same streams in DataFusion
+
+[`datafusion/`](./datafusion/) is a Rust counterpart of `parallel_read_adbc` that reads
+the streams with [DataFusion](https://datafusion.apache.org/) instead of DuckDB, to
+check whether the client engine affects the results. It takes the same options and
+prints the same output, so the same experiment scripts can run either binary.
+
+- It loads the same ADBC driver library through the same ADBC profile, using the ADBC
+  driver manager.
+  - `adbc_driver_manager` 0.24.0 and DataFusion 55.2.0 both use arrow 59.3.2, so batches
+    pass from the driver to DataFusion without conversion.
+- Each stream opens its own connection on a dedicated reader thread, like `read_adbc`
+  with `ADBC_READER_THREAD=1`, and pushes Arrow batches into a bounded channel.
+- DataFusion runs `SELECT * FROM` a `StreamingTable` over that channel and drains every
+  batch.
+  - All streams share one `SessionContext` and one tokio runtime with `--threads`
+    workers.
+  - Unlike `read_adbc`, it does not call `ExecuteSchema` first. The schema comes from
+    the result stream.
+- `--checksum` compares row counts and an order-independent sum of row hashes (FNV-1a
+  over arrow's row encoding of every column).
+  - The hash values differ from `parallel_read_adbc`'s, which uses DuckDB's `hash()`.
+  - Each tool's own full read and range reads must agree.
+
+```sh
+cd bench/datafusion && cargo build --release
+target/release/parallel_read_datafusion --profile=profile://myclickhouse --threads=20 --ch-max-threads=split 1 2 4 10
+```
+
+Results are in [reports/duckdb-vs-datafusion-20261112](../reports/duckdb-vs-datafusion-20261112/README.md).

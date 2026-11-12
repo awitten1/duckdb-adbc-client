@@ -1,0 +1,52 @@
+round	client	streams	repeat	wall_s
+1	duckdb	1	1	5.66785
+1	duckdb	1	2	7.02859
+1	duckdb	1	3	7.06632
+# cpu	1	duckdb	1	process_wall=26.262	user=23.889	sys=10.003
+1	datafusion	1	1	4.919884129
+1	datafusion	1	2	4.775567857
+1	datafusion	1	3	4.787056983
+# cpu	1	datafusion	1	process_wall=21.280	user=14.766	sys=7.822
+1	duckdb	10	1	3.39026
+1	duckdb	10	2	3.393
+1	duckdb	10	3	3.43948
+# cpu	1	duckdb	10	process_wall=15.818	user=33.170	sys=26.753
+1	datafusion	10	1	3.33751809
+1	datafusion	10	2	3.324226417
+1	datafusion	10	3	3.339218851
+# cpu	1	datafusion	10	process_wall=16.793	user=25.018	sys=24.835
+# curl	1	5.249373
+2	duckdb	1	1	5.35918
+2	duckdb	1	2	5.45872
+2	duckdb	1	3	6.40416
+# cpu	2	duckdb	1	process_wall=22.906	user=22.450	sys=8.244
+2	datafusion	1	1	5.109889016
+2	datafusion	1	2	5.957641078
+2	datafusion	1	3	4.725008326
+# cpu	2	datafusion	1	process_wall=20.556	user=14.402	sys=7.472
+2	duckdb	10	1	3.37881
+2	duckdb	10	2	3.40848
+2	duckdb	10	3	3.48439
+# cpu	2	duckdb	10	process_wall=15.976	user=32.550	sys=24.819
+2	datafusion	10	1	3.3816021640000002
+2	datafusion	10	2	3.32613301
+2	datafusion	10	3	3.398272496
+# cpu	2	datafusion	10	process_wall=15.566	user=24.413	sys=23.880
+# curl	2	5.111250
+3	duckdb	1	1	5.49101
+3	duckdb	1	2	6.91003
+3	duckdb	1	3	5.51059
+# cpu	3	duckdb	1	process_wall=23.429	user=22.752	sys=8.374
+3	datafusion	1	1	5.107770153
+3	datafusion	1	2	5.239511359
+3	datafusion	1	3	6.507259616
+# cpu	3	datafusion	1	process_wall=21.864	user=14.952	sys=8.199
+3	duckdb	10	1	3.38972
+3	duckdb	10	2	3.39007
+3	duckdb	10	3	3.48435
+# cpu	3	duckdb	10	process_wall=15.780	user=33.135	sys=27.334
+3	datafusion	10	1	3.328129963
+3	datafusion	10	2	3.378975089
+3	datafusion	10	3	3.371388285
+# cpu	3	datafusion	10	process_wall=14.851	user=23.374	sys=23.688
+# curl	3	5.067967
