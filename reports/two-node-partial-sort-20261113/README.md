@@ -29,6 +29,10 @@ SortPreservingMergeExec
 
 ## Results
 
+![Runtime against pushdown ratio for DuckDB and DataFusion, with DuckDB and ClickHouse ORDER BY baselines, across four sort keys](alpha_sweep.png)
+
+[Vector chart](alpha_sweep.svg) · [Plot script](plot_alpha.py)
+
 Seconds to consume all 75 million rows. The fastest alpha per engine and key is bold. The two rightmost columns are baselines measured in the DuckDB pass, with plain DuckDB `ORDER BY` over an unsorted ADBC read or plain `read_adbc` over a ClickHouse `ORDER BY`.
 
 | Sort key | Client | α=0 | α=.25 | α=.5 | α=.75 | α=1 | DuckDB baseline | ClickHouse baseline |
