@@ -1,0 +1,30 @@
+SortPreservingMergeExec: [o_totalprice@3 ASC NULLS LAST]
+  SortExec: expr=[o_totalprice@3 ASC NULLS LAST], preserve_partitioning=[true]
+    RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1
+      StreamingTableExec: partition_sizes=1, projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]
+
+SortPreservingMergeExec: [o_totalprice@3 ASC NULLS LAST]
+  UnionExec
+    SortPreservingMergeExec: [o_totalprice@3 ASC NULLS LAST]
+      SortExec: expr=[o_totalprice@3 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1
+          StreamingTableExec: partition_sizes=1, projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]
+    StreamingTableExec: partition_sizes=1, projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment], output_ordering=[o_totalprice@3 ASC NULLS LAST]
+
+SortPreservingMergeExec: [o_totalprice@3 ASC NULLS LAST]
+  UnionExec
+    SortPreservingMergeExec: [o_totalprice@3 ASC NULLS LAST]
+      SortExec: expr=[o_totalprice@3 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1
+          StreamingTableExec: partition_sizes=1, projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]
+    StreamingTableExec: partition_sizes=1, projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment], output_ordering=[o_totalprice@3 ASC NULLS LAST]
+
+SortPreservingMergeExec: [o_totalprice@3 ASC NULLS LAST]
+  UnionExec
+    SortPreservingMergeExec: [o_totalprice@3 ASC NULLS LAST]
+      SortExec: expr=[o_totalprice@3 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1
+          StreamingTableExec: partition_sizes=1, projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment]
+    StreamingTableExec: partition_sizes=1, projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment], output_ordering=[o_totalprice@3 ASC NULLS LAST]
+
+StreamingTableExec: partition_sizes=1, projection=[o_orderkey, o_custkey, o_orderstatus, o_totalprice, o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment], output_ordering=[o_totalprice@3 ASC NULLS LAST]

@@ -177,3 +177,18 @@ target/release/parallel_read_datafusion --profile=profile://myclickhouse --threa
 ```
 
 Results are in [reports/duckdb-vs-datafusion-20261112](../reports/duckdb-vs-datafusion-20261112/README.md).
+
+### Direct DataFusion partial sort
+
+The Rust benchmark also accepts `--alpha` to build and run the two-range
+partial-sort physical plan. Pass a single column name to `--order-by`. The
+benchmark emits plans on stderr and a timing table on stdout. Add `--checksum`
+for a separate correctness pass that checks global sort order and full-row
+checksums across the supplied ratios.
+
+```sh
+target/release/parallel_read_datafusion --profile=profile://myclickhouse \
+  --threads=20 --order-by=o_totalprice --alpha=0,0.25,0.5,0.75,1 --repeats=1
+```
+
+See the [two-node SF50 comparison](../reports/two-node-partial-sort-20261113/README.md).
