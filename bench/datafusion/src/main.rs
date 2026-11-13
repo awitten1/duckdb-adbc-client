@@ -16,6 +16,9 @@
 //!   --ch-settings=LIST --threads=K --memory-limit=SIZE --repeats=R --checksum [STREAM_COUNT ...]
 //! `--checksum` compares the row count and an order-independent sum of row hashes (FNV-1a over arrow's row
 //! encoding of every column) for one full read against N range reads.
+//! `--alpha=0,0.25,0.5,0.75,1 --order-by=COLUMN` runs a direct physical-plan sort sweep.
+
+mod partial_sort;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -57,6 +60,7 @@ struct Options {
     memory_limit: usize,
     repeats: usize,
     checksum: bool,
+    alphas: Option<Vec<u32>>,
     streams: Vec<usize>,
 }
 
@@ -96,6 +100,7 @@ fn parse_options() -> Options {
         memory_limit: parse_size("56GiB"),
         repeats: 3,
         checksum: false,
+        alphas: None,
         streams: Vec::new(),
     };
     for arg in std::env::args().skip(1) {
@@ -120,6 +125,8 @@ fn parse_options() -> Options {
             o.memory_limit = parse_size(&v);
         } else if let Some(v) = value("--repeats") {
             o.repeats = v.parse().unwrap_or_else(|_| fail("bad --repeats"));
+        } else if let Some(v) = value("--alpha") {
+            o.alphas = Some(v.split(',').map(partial_sort::parse_alpha).collect());
         } else if arg == "--checksum" {
             o.checksum = true;
         } else if let Ok(n) = arg.parse::<usize>() {
@@ -130,6 +137,9 @@ fn parse_options() -> Options {
         } else {
             fail(format!("unknown argument {arg}"));
         }
+    }
+    if o.alphas.is_some() && (o.order_by.is_empty() || !o.streams.is_empty()) {
+        fail("--alpha requires --order-by=COLUMN and takes no stream counts");
     }
     if o.streams.is_empty() {
         o.streams = vec![1, 2, 4];
@@ -156,11 +166,7 @@ fn read_profile(profile: &str) -> (String, String) {
     (field("driver"), field("uri"))
 }
 
-fn range_query(o: &Options, streams: usize, lo: i64, hi: i64) -> String {
-    let mut sql = format!("SELECT * FROM {}.{} WHERE {} BETWEEN {lo} AND {hi}", o.database, o.table, o.key);
-    if !o.order_by.is_empty() {
-        sql += &format!(" ORDER BY {}", o.order_by);
-    }
+fn with_clickhouse_settings(o: &Options, streams: usize, mut sql: String) -> String {
     let mut settings = Vec::new();
     if o.ch_max_threads == "split" {
         settings.push(format!("max_threads={}", std::cmp::max(1, 32 / streams)));
@@ -174,6 +180,14 @@ fn range_query(o: &Options, streams: usize, lo: i64, hi: i64) -> String {
         sql += &format!(" SETTINGS {}", settings.join(", "));
     }
     sql
+}
+
+fn range_query(o: &Options, streams: usize, lo: i64, hi: i64) -> String {
+    let mut sql = format!("SELECT * FROM {}.{} WHERE {} BETWEEN {lo} AND {hi}", o.database, o.table, o.key);
+    if !o.order_by.is_empty() {
+        sql += &format!(" ORDER BY {}", o.order_by);
+    }
+    with_clickhouse_settings(o, streams, sql)
 }
 
 /// N contiguous, disjoint ranges covering [lo, hi], split exactly as parallel_read_adbc splits them.
@@ -337,6 +351,12 @@ fn main() {
     let _ = reader_thread.join();
     let col = |i: usize| batch.column(i).as_any().downcast_ref::<Int64Array>().unwrap_or_else(|| fail("bounds type")).value(0);
     let (lo, hi, total) = (col(0), col(1), col(2));
+
+    if let Some(alphas) = &o.alphas {
+        rt.block_on(partial_sort::sweep(&o, &ctx, &driver, &uri, (lo, hi, total), alphas))
+            .unwrap_or_else(|e| fail(e));
+        return;
+    }
 
     let describe = format!(
         "{source}: {total} rows, {} in [{lo}, {hi}]; {} DataFusion threads shared by all streams; ClickHouse \
